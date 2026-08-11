@@ -1,0 +1,20 @@
+# Binaries / build
+/bin/
+/dist/
+/tvr
+*.exe
+*.test
+
+# Data / local runtime
+/data/
+*.db
+*.db-*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Temp
+/tmp/
+*.tmp

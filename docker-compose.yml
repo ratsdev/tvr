@@ -1,0 +1,18 @@
+services:
+  tvr:
+    build: .
+    image: tvr:local
+    ports:
+      - "8080:8080"
+    environment:
+      TVR_LISTEN: ":8080"
+      # Optional: TVR_BASE_URL for a fixed public origin.
+      # Optional: TVR_TRUST_PROXY=true only behind a trusted reverse proxy.
+      TVR_DATA_DIR: /data
+      TVR_LOG_LEVEL: info
+    volumes:
+      - tvr-data:/data
+    restart: unless-stopped
+
+volumes:
+  tvr-data:
