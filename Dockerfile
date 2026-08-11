@@ -10,13 +10,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tvr ./c
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata \
-  && adduser -D -H -u 1000 tvr
-WORKDIR /data
+  && adduser -D -H -u 1000 tvr \
+  && mkdir -p /data \
+  && chown tvr:tvr /data
 COPY --from=build /out/tvr /usr/local/bin/tvr
 USER tvr
+WORKDIR /data
 EXPOSE 8080
 ENV TVR_LISTEN=:8080 \
-    TVR_BASE_URL=http://localhost:8080 \
     TVR_DATA_DIR=/data \
     TVR_DATABASE=/data/tvr.db
 VOLUME ["/data"]

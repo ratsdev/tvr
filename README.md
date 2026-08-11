@@ -27,7 +27,7 @@ Open `http://localhost:8080`.
 ### Docker
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Optionally set `TVR_BASE_URL` to a fixed public origin. If unset, playlist and UI links are derived from the request Host (and TLS state). Set `TVR_TRUST_PROXY=true` only behind a trusted reverse proxy that strips client-supplied `X-Forwarded-*` headers.

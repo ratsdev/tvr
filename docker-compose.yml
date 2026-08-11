@@ -1,7 +1,6 @@
 services:
   tvr:
-    build: .
-    image: tvr:local
+    image: ghcr.io/ratsdev/tvr:latest
     ports:
       - "8080:8080"
     environment:
