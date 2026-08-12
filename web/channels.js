@@ -159,8 +159,14 @@ function updateChannelMeta(ch) {
   } else {
     meta.textContent = "Used by: none";
   }
-  document.getElementById("btn-test-channel").classList.toggle("hidden", state.creatingChannel);
-  document.getElementById("btn-del-channel").classList.toggle("hidden", state.creatingChannel);
+  const creating = state.creatingChannel;
+  document.getElementById("btn-test-channel").classList.toggle("hidden", creating);
+  document.getElementById("btn-del-channel").classList.toggle("hidden", creating);
+  const linkRow = document.getElementById("channel-link-row");
+  const copyBtn = document.getElementById("btn-copy-channel-stream");
+  const url = ch?.id ? channelStreamURL(ch.id) : "";
+  linkRow.classList.toggle("hidden", !url);
+  copyBtn.dataset.url = url;
 }
 
 function showChannelDetail({ forceFill = false } = {}) {
@@ -325,6 +331,11 @@ function wireChannels() {
         loading.update("error", "Channel test failed", String(res.error || res.status_code));
       }
     } catch (err) { loading.update("error", "Channel test failed", err.message); }
+  });
+
+  document.getElementById("btn-copy-channel-stream").addEventListener("click", () => {
+    const url = document.getElementById("btn-copy-channel-stream").dataset.url;
+    copyText("Stream", url);
   });
 
   document.getElementById("btn-test-all-channels").addEventListener("click", async () => {

@@ -53,31 +53,6 @@ async function openRelayEditor(id) {
   applyRelayEditor(detail, { clearMemberSelection: true, forceFill: true });
 }
 
-async function copyText(label, text) {
-  if (!text) return;
-  const body = `${label}: ${text}`;
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success("Copied", body);
-  } catch {
-    // Fallback for older browsers / insecure contexts
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand("copy");
-      toast.success("Copied", body);
-    } catch (err) {
-      toast.error("Copy failed", err.message || text);
-    } finally {
-      ta.remove();
-    }
-  }
-}
-
 async function loadRelays() {
   const gen = ++state.gens.relays;
   const relays = await api("/api/relays");
@@ -148,6 +123,7 @@ function renderLineup() {
               <div class="sub">tvg-id=${esc(m.tvg_id || "—")}</div>
             </div>
             <div class="row">
+              <button type="button" class="small" data-copy-stream="${esc(m.channel_id)}" title="Copy stream URL">Stream</button>
               <button type="button" class="small" data-edit-member="${m.id}">Edit</button>
               <button type="button" class="small danger" data-del-member="${m.id}">Remove</button>
             </div>
@@ -485,6 +461,8 @@ function wireRelays() {
         await refreshRelayLineup();
         await loadChannels();
       } catch (err) { toast.error("Delete group failed", err.message); }
+    } else if (t.dataset.copyStream) {
+      copyText("Stream", channelStreamURL(t.dataset.copyStream));
     } else if (t.dataset.editMember) {
       const m = state.currentRelay.memberships.find((x) => String(x.id) === t.dataset.editMember);
       await openMemberDialog(m);

@@ -70,6 +70,34 @@ function relayURLs(slug) {
   };
 }
 
+function channelStreamURL(channelID) {
+  if (!channelID) return "";
+  return `${publicBaseURL()}/stream/${channelID}`;
+}
+
+async function copyText(label, text) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success("Copied", `${label}: ${text}`);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      toast.success("Copied", `${label}: ${text}`);
+    } catch (err) {
+      toast.error("Copy failed", err.message || text);
+    } finally {
+      ta.remove();
+    }
+  }
+}
+
 function upsertById(list, item) {
   const idx = list.findIndex((x) => x.id === item.id);
   if (idx >= 0) list[idx] = { ...list[idx], ...item };
