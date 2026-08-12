@@ -41,11 +41,25 @@ func main() {
 	}
 	defer st.Close()
 
+	settings, err := st.GetTranscodeSettings(context.Background())
+	if err != nil {
+		logger.Error("load transcode settings", "err", err)
+		os.Exit(1)
+	}
+
 	rel := relay.NewManager(relay.Options{
 		BufferSize:  cfg.RelayBufferSize,
 		IdleTimeout: cfg.RelayIdleTimeout,
 		ConnTimeout: cfg.RelayConnTimeout,
 		Logger:      logger,
+		TranscodeProfile: relay.TranscodeProfile{
+			FFmpegPath:       cfg.FFmpegPath,
+			VideoCRF:         settings.VideoCRF,
+			VideoPreset:      settings.VideoPreset,
+			AudioBitrateKbps: settings.AudioBitrateKbps,
+			MaxHeight:        settings.MaxHeight,
+			StartupTimeout:   time.Duration(settings.StartupTimeoutSeconds) * time.Second,
+		},
 	})
 
 	epgSvc := epg.New(st, cfg.DataDir, cfg.EPGMaxBytes, logger)
@@ -84,6 +98,7 @@ func main() {
 			"base_url", baseURL,
 			"trust_proxy", cfg.TrustProxy,
 			"data_dir", cfg.DataDir,
+			"ffmpeg", cfg.FFmpegPath,
 		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server failed", "err", err)
@@ -94,8 +109,12 @@ func main() {
 	<-sigCtx.Done()
 	logger.Info("shutting down")
 
-	// 1) Stop accepting new stream subscriptions and detach existing sessions.
-	rel.Close()
+	// 1) Stop accepting new stream subscriptions and reap active sessions/ffmpeg.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := rel.Close(closeCtx); err != nil {
+		logger.Warn("relay close", "err", err)
+	}
+	closeCancel()
 
 	// 2) Shut down HTTP while EPG admission remains open for in-flight mutations.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

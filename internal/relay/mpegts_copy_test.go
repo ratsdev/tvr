@@ -15,7 +15,7 @@ func TestCopyMPEGTSSegmentRejectsOversize(t *testing.T) {
 		IdleTimeout: time.Second,
 		ConnTimeout: time.Second,
 		Logger:      slog.Default(),
-	}, nil)
+	}, DefaultTranscodeProfile(), nil)
 	v := s.addViewer(8192)
 	t.Cleanup(func() { s.removeViewer(v.id) })
 
@@ -41,7 +41,7 @@ func TestCopyMPEGTSSegmentRequiresMedia(t *testing.T) {
 		IdleTimeout: time.Second,
 		ConnTimeout: time.Second,
 		Logger:      slog.Default(),
-	}, nil)
+	}, DefaultTranscodeProfile(), nil)
 	v := s.addViewer(8)
 	t.Cleanup(func() { s.removeViewer(v.id) })
 

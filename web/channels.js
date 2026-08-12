@@ -129,6 +129,7 @@ function readChannelDraft() {
     logo_url: document.getElementById("channel-logo").value,
     upstream_url: document.getElementById("channel-url").value,
     headers: document.getElementById("channel-headers").value,
+    transcode_enabled: document.getElementById("channel-transcode").checked,
   };
 }
 
@@ -142,6 +143,7 @@ function fillChannelForm(ch) {
   document.getElementById("channel-name").value = ch?.name || "";
   document.getElementById("channel-logo").value = ch?.logo_url || "";
   document.getElementById("channel-url").value = ch?.upstream_url || "";
+  document.getElementById("channel-transcode").checked = !!ch?.transcode_enabled;
   document.getElementById("channel-headers").value = JSON.stringify(ch?.headers || {}, null, 2);
   setChannelDetailLogo(ch?.logo_url || "");
   document.getElementById("channel-error").textContent = "";
@@ -291,6 +293,7 @@ function wireChannels() {
       logo_url: document.getElementById("channel-logo").value,
       upstream_url: document.getElementById("channel-url").value,
       headers,
+      transcode_enabled: document.getElementById("channel-transcode").checked,
     };
     const id = document.getElementById("channel-id").value;
     try {

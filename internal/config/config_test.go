@@ -14,6 +14,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("TVR_DATA_DIR", "")
 	t.Setenv("TVR_DATABASE", "")
 	t.Setenv("TVR_LOG_LEVEL", "")
+	t.Setenv("TVR_FFMPEG_PATH", "")
 	t.Setenv("TVR_RELAY_BUFFER_SIZE", "")
 	t.Setenv("TVR_RELAY_IDLE_TIMEOUT", "")
 	t.Setenv("TVR_RELAY_CONN_TIMEOUT", "")
@@ -32,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.TrustProxy {
 		t.Fatal("TrustProxy should default false")
+	}
+	if cfg.FFmpegPath != "ffmpeg" {
+		t.Fatalf("ffmpeg=%q", cfg.FFmpegPath)
 	}
 	if cfg.RelayIdleTimeout != 30*time.Second {
 		t.Fatalf("idle=%s", cfg.RelayIdleTimeout)

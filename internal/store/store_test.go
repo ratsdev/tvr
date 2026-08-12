@@ -477,3 +477,161 @@ func TestMembershipNumberFollowsOrder(t *testing.T) {
 		t.Fatalf("expected renumber after reorder, got m2=%d m1=%d", byID[m2.ID].Number, byID[m1.ID].Number)
 	}
 }
+
+func TestChannelTranscodeEnabled(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.TranscodeEnabled {
+		t.Fatal("expected create default false")
+	}
+	on := true
+	ch, err = st.UpdateChannel(ctx, ch.ID, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts", TranscodeEnabled: &on,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ch.TranscodeEnabled {
+		t.Fatal("expected enabled after update")
+	}
+	ch, err = st.UpdateChannel(ctx, ch.ID, store.ChannelInput{
+		Name: "News HD", UpstreamURL: "http://example.com/a.ts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ch.TranscodeEnabled || ch.Name != "News HD" {
+		t.Fatalf("omitted pointer must preserve flag: %+v", ch)
+	}
+	off := false
+	ch, err = st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Sports", UpstreamURL: "http://example.com/b.ts", TranscodeEnabled: &off,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.TranscodeEnabled {
+		t.Fatal("expected explicit false")
+	}
+}
+
+func TestOpenMigratesTranscodeColumnAndSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-transcode.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  logo_url TEXT NOT NULL DEFAULT '',
+  upstream_url TEXT NOT NULL UNIQUE,
+  headers_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, created_at, updated_at)
+VALUES ('c1', 'News', '', 'http://example.com/a.ts', '{}', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z');
+`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ch, err := st.GetChannel(context.Background(), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.TranscodeEnabled {
+		t.Fatal("migrated channel must default transcode off")
+	}
+	settings, err := st.GetTranscodeSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings != store.DefaultTranscodeSettings() {
+		t.Fatalf("settings=%+v", settings)
+	}
+}
+
+func TestTranscodeSettingsUpdate(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	got, err := st.UpdateTranscodeSettings(ctx, store.TranscodeSettings{
+		VideoCRF: 28, VideoPreset: "fast", AudioBitrateKbps: 192, MaxHeight: 720, StartupTimeoutSeconds: 45,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VideoCRF != 28 || got.VideoPreset != "fast" || got.AudioBitrateKbps != 192 || got.MaxHeight != 720 || got.StartupTimeoutSeconds != 45 {
+		t.Fatalf("got=%+v", got)
+	}
+	if _, err := st.UpdateTranscodeSettings(ctx, store.TranscodeSettings{
+		VideoCRF: 23, VideoPreset: "nope", AudioBitrateKbps: 128, MaxHeight: 0, StartupTimeoutSeconds: 30,
+	}); !errors.Is(err, store.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
+func TestImportRelayPreservesTranscodeFlag(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	on := true
+	existing, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts", TranscodeEnabled: &on,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := st.ImportRelay(ctx, store.ImportRelayInput{
+		Name: "Reuse",
+		Slug: "reuse",
+		Entries: []store.ImportRelayEntry{
+			{Name: "News", UpstreamURL: "http://example.com/a.ts", GroupTitle: "News"},
+			{Name: "Sports", UpstreamURL: "http://example.com/b.ts", GroupTitle: "Sports"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.ChannelsCreated != 1 || out.ChannelsReused != 1 {
+		t.Fatalf("unexpected import counts: %+v", out)
+	}
+	reused, err := st.GetChannel(ctx, existing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reused.TranscodeEnabled {
+		t.Fatal("reuse must preserve transcode_enabled")
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created store.Channel
+	for _, ch := range channels {
+		if ch.UpstreamURL == "http://example.com/b.ts" {
+			created = ch
+		}
+	}
+	if created.ID == "" {
+		t.Fatal("missing created channel")
+	}
+	if created.TranscodeEnabled {
+		t.Fatal("imported channel must default false")
+	}
+}

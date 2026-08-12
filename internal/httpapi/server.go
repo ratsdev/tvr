@@ -9,8 +9,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +24,10 @@ import (
 	"github.com/jqjiang/tvr/internal/store"
 )
 
+// channelRelayCleanupTimeout bounds waiting for active relay sessions after
+// channel update/delete. Overridable in tests.
+var channelRelayCleanupTimeout = 10 * time.Second
+
 // Server is the HTTP API and admin UI.
 type Server struct {
 	cfg    config.Config
@@ -32,6 +38,9 @@ type Server struct {
 	logger *slog.Logger
 	mux    *http.ServeMux
 	webFS  fs.FS
+
+	settingsMu sync.Mutex
+	channelMu  sync.Mutex
 }
 
 // New constructs the HTTP server.
@@ -109,6 +118,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/relays/{id}/memberships/{membershipId}", s.handleUpdateMembership)
 	s.mux.HandleFunc("DELETE /api/relays/{id}/memberships/{membershipId}", s.handleDeleteMembership)
 	s.mux.HandleFunc("GET /api/relay/status", s.handleRelayStatus)
+
+	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 
 	s.mux.HandleFunc("GET /r/{slug}/playlist.m3u", s.handleRelayPlaylist)
 	s.mux.HandleFunc("GET /r/{slug}/epg.xml", s.handleRelayEPG)
@@ -213,9 +225,28 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+	before, err := s.store.GetChannel(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	ch, err := s.store.UpdateChannel(r.Context(), id, in)
 	if err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	invalidate := before.TranscodeEnabled != ch.TranscodeEnabled ||
+		before.UpstreamURL != ch.UpstreamURL ||
+		!reflect.DeepEqual(before.Headers, ch.Headers)
+	// Detach cleanup from the client request so abort/navigation cannot
+	// report failure after the channel row was already committed.
+	ctx, cancel := context.WithTimeout(context.Background(), channelRelayCleanupTimeout)
+	defer cancel()
+	if err := s.relay.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), invalidate); err != nil {
+		s.logger.Error("publish channel revision", "channel_id", ch.ID, "err", err)
+		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channel saved but active relay cleanup failed: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, ch)
@@ -227,8 +258,17 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 	if err := s.store.DeleteChannel(r.Context(), id); err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), channelRelayCleanupTimeout)
+	defer cancel()
+	if err := s.relay.BlockChannel(ctx, id); err != nil {
+		s.logger.Error("block deleted channel", "channel_id", id, "err", err)
+		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channel deleted but active relay cleanup failed: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -794,12 +834,13 @@ func (s *Server) handleChannelStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveChannelStream(w http.ResponseWriter, r *http.Request, ch store.Channel) {
-	reader, err := s.relay.Subscribe(r.Context(), ch.ID, relay.Upstream{
-		URL:     ch.UpstreamURL,
-		Headers: ch.Headers,
-	})
+	reader, err := s.subscribeChannel(r.Context(), ch)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			return
+		}
+		if errors.Is(err, relay.ErrChannelBlocked) || errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
 			return
 		}
 		if errors.Is(err, relay.ErrReadyTimeout) {

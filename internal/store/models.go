@@ -4,23 +4,34 @@ import "time"
 
 // Channel is a reusable global IPTV upstream definition.
 type Channel struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	LogoURL     string            `json:"logo_url"`
-	UpstreamURL string            `json:"upstream_url"`
-	Headers     map[string]string `json:"headers"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
-	RelayCount int      `json:"relay_count"`
-	RelaySlugs []string `json:"relay_slugs"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	LogoURL          string            `json:"logo_url"`
+	UpstreamURL      string            `json:"upstream_url"`
+	Headers          map[string]string `json:"headers"`
+	TranscodeEnabled bool              `json:"transcode_enabled"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+	RelayCount       int               `json:"relay_count"`
+	RelaySlugs       []string          `json:"relay_slugs"`
 }
 
 // ChannelInput is the writable subset used by create/update APIs.
 type ChannelInput struct {
-	Name        string            `json:"name"`
-	LogoURL     string            `json:"logo_url"`
-	UpstreamURL string            `json:"upstream_url"`
-	Headers     map[string]string `json:"headers"`
+	Name             string            `json:"name"`
+	LogoURL          string            `json:"logo_url"`
+	UpstreamURL      string            `json:"upstream_url"`
+	Headers          map[string]string `json:"headers"`
+	TranscodeEnabled *bool             `json:"transcode_enabled,omitempty"`
+}
+
+// TranscodeSettings is the singleton editable transcoder profile.
+type TranscodeSettings struct {
+	VideoCRF               int    `json:"video_crf"`
+	VideoPreset            string `json:"video_preset"`
+	AudioBitrateKbps       int    `json:"audio_bitrate_kbps"`
+	MaxHeight              int    `json:"max_height"`
+	StartupTimeoutSeconds  int    `json:"startup_timeout_seconds"`
 }
 
 // EPGSource is a remote XMLTV feed.

@@ -198,6 +198,7 @@ const PAGE_META = {
   epgs: { title: "EPG Sources", desc: "Configure EPG feeds" },
   relays: { title: "Relays", desc: "Publish playlists and EPG feeds" },
   "epg-viewer": { title: "EPG Viewer", desc: "Review EPG data" },
+  settings: { title: "Settings", desc: "Transcoding profile and system configuration" },
 };
 
 async function api(path, options = {}) {
@@ -274,7 +275,10 @@ function showTab(name) {
     ensureViewerWindow();
     fillViewerSources();
     loadViewerGuide({ force: false });
-  } else {
+  } else if (name === "settings") {
+    loadSettings().catch(() => {});
+  }
+  if (name !== "epg-viewer") {
     // Leaving viewer: abort in-flight fetch and always clear loading ownership.
     if (state.viewer.abort) {
       state.viewer.abort.abort();

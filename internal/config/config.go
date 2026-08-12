@@ -17,6 +17,7 @@ type Config struct {
 	DataDir          string
 	DatabasePath     string
 	LogLevel         string
+	FFmpegPath       string
 	RelayBufferSize  int
 	RelayIdleTimeout time.Duration
 	RelayConnTimeout time.Duration
@@ -32,6 +33,7 @@ func Load() (Config, error) {
 		BaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("TVR_BASE_URL")), "/"),
 		DataDir:          envOr("TVR_DATA_DIR", "./data"),
 		LogLevel:         strings.ToLower(envOr("TVR_LOG_LEVEL", "info")),
+		FFmpegPath:       envOr("TVR_FFMPEG_PATH", "ffmpeg"),
 		RelayBufferSize:  envIntOr("TVR_RELAY_BUFFER_SIZE", 1024),
 		RelayIdleTimeout: envDurationOr("TVR_RELAY_IDLE_TIMEOUT", 30*time.Second),
 		RelayConnTimeout: envDurationOr("TVR_RELAY_CONN_TIMEOUT", 10*time.Second),

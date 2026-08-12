@@ -39,7 +39,7 @@ func TestStatusIdleAfterViewerCloses(t *testing.T) {
 		BufferSize:  64,
 		IdleTimeout: 3 * time.Second,
 	})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r, err := mgr.Subscribe(ctx, "9", relay.Upstream{URL: srv.URL})
@@ -109,7 +109,7 @@ func TestStatusStreamingAfterUpstreamReconnect(t *testing.T) {
 		IdleTimeout: 3 * time.Second,
 		ConnTimeout: 3 * time.Second,
 	})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -150,7 +150,7 @@ func TestStatusIdleDoesNotRequireDrainingReader(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 32, IdleTimeout: 2 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	r, err := mgr.Subscribe(context.Background(), "3", relay.Upstream{URL: srv.URL})
 	if err != nil {

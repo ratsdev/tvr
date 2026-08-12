@@ -45,7 +45,7 @@ new.ts
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 2 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -104,7 +104,7 @@ seg2.ts
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 128, IdleTimeout: 2 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -169,7 +169,7 @@ seg.ts
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 2 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -234,7 +234,7 @@ seg.ts
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 4096, IdleTimeout: 2 * time.Second, ConnTimeout: 3 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

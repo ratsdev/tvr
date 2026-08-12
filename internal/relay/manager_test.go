@@ -45,7 +45,7 @@ func TestSharedUpstreamAndSlowClient(t *testing.T) {
 		IdleTimeout: 2 * time.Second,
 		ConnTimeout: time.Second,
 	})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()
@@ -121,7 +121,7 @@ func TestPATStartupForLateJoiner(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	mgr := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
-	t.Cleanup(mgr.Close)
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	defer cancel1()

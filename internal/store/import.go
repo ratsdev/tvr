@@ -226,7 +226,7 @@ func containsInt64(ids []int64, want int64) bool {
 
 func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {
 	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
 FROM channels c WHERE c.upstream_url = ?`, strings.TrimSpace(rawURL))
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -244,15 +244,17 @@ func createChannelTx(ctx context.Context, q querier, in ChannelInput) (Channel, 
 	if err != nil {
 		return Channel{}, err
 	}
+	transcode := resolveTranscodeEnabled(in.TranscodeEnabled, false)
 	id := uuid.NewString()
 	_, err = q.ExecContext(ctx, `
-INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, transcode_enabled, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		strings.TrimSpace(in.Name),
 		strings.TrimSpace(in.LogoURL),
 		strings.TrimSpace(in.UpstreamURL),
 		string(headersJSON),
+		boolToInt(transcode),
 		now.Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
 	)
@@ -260,7 +262,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		return Channel{}, channelConflictErr(err)
 	}
 	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
 FROM channels c WHERE c.id = ?`, id)
 	return scanChannel(row)
 }

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"github.com/jqjiang/tvr/internal/natsort"
@@ -81,8 +80,18 @@ CREATE TABLE IF NOT EXISTS channels (
   logo_url TEXT NOT NULL DEFAULT '',
   upstream_url TEXT NOT NULL UNIQUE,
   headers_json TEXT NOT NULL DEFAULT '{}',
+  transcode_enabled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  video_crf INTEGER NOT NULL DEFAULT 23,
+  video_preset TEXT NOT NULL DEFAULT 'veryfast',
+  audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
+  max_height INTEGER NOT NULL DEFAULT 0,
+  startup_timeout_seconds INTEGER NOT NULL DEFAULT 30
 );
 
 CREATE TABLE IF NOT EXISTS relays (
@@ -125,7 +134,51 @@ CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(ch
 	if err != nil {
 		return err
 	}
+	if err := s.ensureChannelTranscodeColumn(); err != nil {
+		return err
+	}
+	if err := s.ensureAppSettingsRow(); err != nil {
+		return err
+	}
 	return s.ensureChannelNameUniqueIndex()
+}
+
+func (s *Store) ensureChannelTranscodeColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(channels)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasCol := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "transcode_enabled" {
+			hasCol = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if hasCol {
+		return nil
+	}
+	_, err = s.db.Exec(`ALTER TABLE channels ADD COLUMN transcode_enabled INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+func (s *Store) ensureAppSettingsRow() error {
+	_, err := s.db.Exec(`
+INSERT OR IGNORE INTO app_settings (
+  id, video_crf, video_preset, audio_bitrate_kbps, max_height, startup_timeout_seconds
+) VALUES (1, 23, 'veryfast', 128, 0, 30)`)
+	return err
 }
 
 // ensureChannelNameUniqueIndex upgrades a legacy non-unique name index (or adds one)
@@ -151,7 +204,7 @@ func (s *Store) ensureChannelNameUniqueIndex() error {
 // ListChannels returns all global channels.
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
 FROM channels c`)
 	if err != nil {
 		return nil, err
@@ -184,7 +237,7 @@ func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
 		return Channel{}, ErrNotFound
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
 FROM channels c WHERE c.id = ?`, id)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -240,35 +293,17 @@ ORDER BY r.slug ASC, r.id ASC`)
 
 // CreateChannel inserts a new global channel.
 func (s *Store) CreateChannel(ctx context.Context, in ChannelInput) (Channel, error) {
-	if err := validateChannelInput(in); err != nil {
-		return Channel{}, err
-	}
-	now := time.Now().UTC()
-	headersJSON, err := json.Marshal(normalizeHeaders(in.Headers))
+	ch, err := createChannelTx(ctx, s.db, in)
 	if err != nil {
 		return Channel{}, err
 	}
-	id := uuid.NewString()
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id,
-		strings.TrimSpace(in.Name),
-		strings.TrimSpace(in.LogoURL),
-		strings.TrimSpace(in.UpstreamURL),
-		string(headersJSON),
-		now.Format(time.RFC3339Nano),
-		now.Format(time.RFC3339Nano),
-	)
-	if err != nil {
-		return Channel{}, channelConflictErr(err)
-	}
-	return s.GetChannel(ctx, id)
+	return s.GetChannel(ctx, ch.ID)
 }
 
 // UpdateChannel updates an existing channel.
 func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (Channel, error) {
-	if _, err := s.GetChannel(ctx, id); err != nil {
+	existing, err := s.GetChannel(ctx, id)
+	if err != nil {
 		return Channel{}, err
 	}
 	if err := validateChannelInput(in); err != nil {
@@ -278,13 +313,16 @@ func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (
 	if err != nil {
 		return Channel{}, err
 	}
+	transcode := resolveTranscodeEnabled(in.TranscodeEnabled, existing.TranscodeEnabled)
 	_, err = s.db.ExecContext(ctx, `
-UPDATE channels SET name = ?, logo_url = ?, upstream_url = ?, headers_json = ?, updated_at = ?
+UPDATE channels
+SET name = ?, logo_url = ?, upstream_url = ?, headers_json = ?, transcode_enabled = ?, updated_at = ?
 WHERE id = ?`,
 		strings.TrimSpace(in.Name),
 		strings.TrimSpace(in.LogoURL),
 		strings.TrimSpace(in.UpstreamURL),
 		string(headersJSON),
+		boolToInt(transcode),
 		time.Now().UTC().Format(time.RFC3339Nano),
 		id,
 	)
@@ -555,13 +593,15 @@ func scanChannel(row rowScanner) (Channel, error) {
 	var (
 		ch          Channel
 		headersJSON string
+		transcode   int
 		createdAt   string
 		updatedAt   string
 	)
-	err := row.Scan(&ch.ID, &ch.Name, &ch.LogoURL, &ch.UpstreamURL, &headersJSON, &createdAt, &updatedAt)
+	err := row.Scan(&ch.ID, &ch.Name, &ch.LogoURL, &ch.UpstreamURL, &headersJSON, &transcode, &createdAt, &updatedAt)
 	if err != nil {
 		return Channel{}, err
 	}
+	ch.TranscodeEnabled = transcode != 0
 	ch.Headers = map[string]string{}
 	if headersJSON != "" {
 		if err := json.Unmarshal([]byte(headersJSON), &ch.Headers); err != nil {
@@ -629,12 +669,22 @@ func validateChannelInput(in ChannelInput) error {
 			return fmt.Errorf("%w: logo_url must be http(s)", ErrValidation)
 		}
 	}
-	for k := range in.Headers {
+	for k, v := range in.Headers {
 		if strings.TrimSpace(k) == "" {
 			return fmt.Errorf("%w: header names must be non-empty", ErrValidation)
 		}
+		if strings.ContainsAny(k, "\r\n\x00") || strings.ContainsAny(v, "\r\n\x00") {
+			return fmt.Errorf("%w: header names and values must not contain CR, LF, or NUL", ErrValidation)
+		}
 	}
 	return nil
+}
+
+func resolveTranscodeEnabled(in *bool, existing bool) bool {
+	if in == nil {
+		return existing
+	}
+	return *in
 }
 
 func validateEPGSourceInput(in EPGSourceInput) error {

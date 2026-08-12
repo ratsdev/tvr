@@ -5,6 +5,7 @@ function wireAll() {
   wireEPGs();
   wireRelays();
   wireViewer();
+  wireSettings();
 }
 
 async function pollStatus() {

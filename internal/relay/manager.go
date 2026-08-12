@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,9 +25,14 @@ var (
 	ErrClosed         = errors.New("relay manager closed")
 	ErrUpstreamFailed = errors.New("relay upstream failed")
 	ErrReadyTimeout   = errors.New("relay readiness timeout")
+	ErrStaleRevision  = errors.New("relay channel revision is stale")
+	ErrChannelBlocked = errors.New("relay channel is blocked")
 )
 
-var errStreamEnded = errors.New("stream ended")
+var (
+	errStreamEnded    = errors.New("stream ended")
+	errSessionStopped = errors.New("relay session stopped")
+)
 
 // Status describes the current state of a channel relay session.
 type Status struct {
@@ -40,25 +46,33 @@ type Status struct {
 
 // Upstream describes how to connect to a channel source.
 type Upstream struct {
-	URL     string
-	Headers map[string]string
+	URL       string
+	Headers   map[string]string
+	Transcode bool
+	Revision  string
 }
 
 // Options configures relay behavior.
 type Options struct {
-	BufferSize  int
-	IdleTimeout time.Duration
-	ConnTimeout time.Duration
-	Logger      *slog.Logger
-	HTTPClient  *http.Client
+	BufferSize       int
+	IdleTimeout      time.Duration
+	ConnTimeout      time.Duration
+	Logger           *slog.Logger
+	HTTPClient       *http.Client
+	TranscodeProfile TranscodeProfile
 }
 
 // Manager owns one shared upstream session per channel.
 type Manager struct {
-	opts     Options
-	mu       sync.Mutex
-	sessions map[string]*session
-	closed   bool
+	opts      Options
+	mu        sync.Mutex
+	sessions  map[string]*session
+	revisions map[string]string
+	blocked   map[string]struct{}
+	sticky    map[string]Status // terminal error status after a session ends
+	epochs    map[string]uint64 // per-channel generation for sticky ownership
+	profile   TranscodeProfile
+	closed    bool
 }
 
 // NewManager creates a relay manager.
@@ -75,6 +89,7 @@ func NewManager(opts Options) *Manager {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	opts.TranscodeProfile = normalizeProfile(opts.TranscodeProfile)
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{
 			Timeout: 0, // live streams must not have a total timeout
@@ -93,8 +108,13 @@ func NewManager(opts Options) *Manager {
 		}
 	}
 	return &Manager{
-		opts:     opts,
-		sessions: make(map[string]*session),
+		opts:      opts,
+		sessions:  make(map[string]*session),
+		revisions: make(map[string]string),
+		blocked:   make(map[string]struct{}),
+		sticky:    make(map[string]Status),
+		epochs:    make(map[string]uint64),
+		profile:   opts.TranscodeProfile,
 	}
 }
 
@@ -115,21 +135,36 @@ func (m *Manager) Subscribe(ctx context.Context, channelID string, upstream Upst
 		m.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if _, blocked := m.blocked[channelID]; blocked {
+		m.mu.Unlock()
+		return nil, ErrChannelBlocked
+	}
+	if rev, ok := m.revisions[channelID]; ok && upstream.Revision != "" && rev != upstream.Revision {
+		m.mu.Unlock()
+		return nil, ErrStaleRevision
+	}
+	if upstream.Revision != "" {
+		m.revisions[channelID] = upstream.Revision
+	}
+
+	var stale *session
 	s, ok := m.sessions[channelID]
 	if ok && s.isStopped() {
 		delete(m.sessions, channelID)
 		ok = false
 	}
+	if ok && s.upstream.Transcode != upstream.Transcode {
+		stale = m.retireSession(channelID)
+		ok = false
+	}
 	if !ok {
-		s = newSession(channelID, upstream, m.opts, nil)
-		s.onIdle = func() { m.removeSession(s) }
-		m.sessions[channelID] = s
-		go s.run()
-	} else {
-		s.updateUpstream(upstream)
+		s = m.startSession(channelID, upstream)
 	}
 	viewer := s.addViewer(m.opts.BufferSize)
 	m.mu.Unlock()
+	if stale != nil {
+		stale.stop()
+	}
 
 	reader := &viewerReader{ctx: ctx, session: s, viewer: viewer}
 	if err := s.waitReady(ctx); err != nil {
@@ -139,41 +174,201 @@ func (m *Manager) Subscribe(ctx context.Context, channelID string, upstream Upst
 	return reader, nil
 }
 
+// PublishChannel records the latest channel revision and optionally detaches the active session.
+func (m *Manager) PublishChannel(ctx context.Context, channelID, revision string, invalidate bool) error {
+	if channelID == "" {
+		return fmt.Errorf("invalid channel id")
+	}
+	m.mu.Lock()
+	delete(m.blocked, channelID)
+	if revision != "" {
+		m.revisions[channelID] = revision
+	}
+	var stale *session
+	if invalidate {
+		stale = m.retireSession(channelID)
+	}
+	m.mu.Unlock()
+	return stopAndWait(ctx, stale)
+}
+
+// BlockChannel rejects future subscriptions and stops any active session for the channel.
+func (m *Manager) BlockChannel(ctx context.Context, channelID string) error {
+	if channelID == "" {
+		return fmt.Errorf("invalid channel id")
+	}
+	m.mu.Lock()
+	m.blocked[channelID] = struct{}{}
+	delete(m.revisions, channelID)
+	stale := m.retireSession(channelID)
+	m.mu.Unlock()
+	return stopAndWait(ctx, stale)
+}
+
+// ApplyProfile installs a new transcoder profile and stops active transcoded sessions.
+func (m *Manager) ApplyProfile(ctx context.Context, profile TranscodeProfile) error {
+	profile = normalizeProfile(profile)
+	m.mu.Lock()
+	m.profile = profile
+	var stale []*session
+	for id, s := range m.sessions {
+		if !s.upstream.Transcode {
+			continue
+		}
+		if retired := m.retireSession(id); retired != nil {
+			stale = append(stale, retired)
+		}
+	}
+	m.mu.Unlock()
+	return stopAndWaitAll(ctx, stale)
+}
+
+// Profile returns a copy of the current transcoder profile.
+func (m *Manager) Profile() TranscodeProfile {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.profile
+}
+
 // Status returns the current status for a channel, or idle if no session.
 func (m *Manager) Status(channelID string) Status {
 	m.mu.Lock()
-	s := m.sessions[channelID]
-	m.mu.Unlock()
-	if s == nil {
-		return Status{ChannelID: channelID, State: "idle"}
+	defer m.mu.Unlock()
+	if s := m.sessions[channelID]; s != nil {
+		return s.status()
 	}
-	return s.status()
+	if st, ok := m.sticky[channelID]; ok {
+		return st
+	}
+	return Status{ChannelID: channelID, State: "idle"}
 }
 
-// AllStatuses returns status for every active session.
+// AllStatuses returns status for every active session plus sticky terminal errors.
 func (m *Manager) AllStatuses() []Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Status, 0, len(m.sessions))
+	out := make([]Status, 0, len(m.sessions)+len(m.sticky))
+	seen := make(map[string]struct{}, len(m.sessions))
 	for _, s := range m.sessions {
-		out = append(out, s.status())
+		st := s.status()
+		out = append(out, st)
+		seen[st.ChannelID] = struct{}{}
+	}
+	for id, st := range m.sticky {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		out = append(out, st)
 	}
 	return out
 }
 
-// Close stops subscription admission and all sessions.
-func (m *Manager) Close() {
+func (m *Manager) rememberFinish(s *session, st Status) {
 	m.mu.Lock()
-	m.closed = true
-	sessions := make([]*session, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		sessions = append(sessions, s)
+	defer m.mu.Unlock()
+	// Only the latest session epoch may publish or clear sticky status.
+	if m.epochs[s.channelID] != s.epoch {
+		return
 	}
-	m.sessions = make(map[string]*session)
-	m.mu.Unlock()
+	if _, active := m.sessions[s.channelID]; active {
+		return
+	}
+	if st.State == "error" && strings.TrimSpace(st.LastError) != "" {
+		st.ChannelID = s.channelID
+		st.Viewers = 0
+		m.sticky[s.channelID] = st
+		return
+	}
+	delete(m.sticky, s.channelID)
+}
+
+// startSession creates and starts a new session. Caller must hold m.mu.
+func (m *Manager) startSession(channelID string, upstream Upstream) *session {
+	delete(m.sticky, channelID)
+	m.epochs[channelID]++
+	s := newSession(channelID, upstream, m.opts, m.profile, nil)
+	s.epoch = m.epochs[channelID]
+	s.onIdle = func() { m.removeSession(s) }
+	s.onFinish = func(st Status) { m.rememberFinish(s, st) }
+	m.sessions[channelID] = s
+	go s.run()
+	return s
+}
+
+// retireSession detaches a channel session and retires its sticky epoch.
+// Caller must hold m.mu. The returned session still needs stop/waitDone.
+func (m *Manager) retireSession(channelID string) *session {
+	delete(m.sticky, channelID)
+	m.epochs[channelID]++
+	s := m.sessions[channelID]
+	if s != nil {
+		delete(m.sessions, channelID)
+	}
+	return s
+}
+
+func stopAndWait(ctx context.Context, s *session) error {
+	if s == nil {
+		return nil
+	}
+	return stopAndWaitAll(ctx, []*session{s})
+}
+
+func stopAndWaitAll(ctx context.Context, sessions []*session) error {
 	for _, s := range sessions {
 		s.stop()
 	}
+	var first error
+	for _, s := range sessions {
+		if err := s.waitDone(ctx); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// Close stops subscription admission and waits for all sessions to finish.
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	m.closed = true
+	sessions := make([]*session, 0, len(m.sessions))
+	for id := range m.sessions {
+		if s := m.retireSession(id); s != nil {
+			sessions = append(sessions, s)
+		}
+	}
+	m.mu.Unlock()
+	return stopAndWaitAll(ctx, sessions)
+}
+
+func normalizeProfile(p TranscodeProfile) TranscodeProfile {
+	def := DefaultTranscodeProfile()
+	unset := p.VideoCRF == 0 && strings.TrimSpace(p.VideoPreset) == "" && p.AudioBitrateKbps == 0 && p.StartupTimeout == 0
+	if strings.TrimSpace(p.FFmpegPath) == "" {
+		p.FFmpegPath = def.FFmpegPath
+	} else {
+		p.FFmpegPath = strings.TrimSpace(p.FFmpegPath)
+	}
+	if strings.TrimSpace(p.VideoPreset) == "" {
+		p.VideoPreset = def.VideoPreset
+	} else {
+		p.VideoPreset = strings.TrimSpace(p.VideoPreset)
+	}
+	if unset {
+		p.VideoCRF = def.VideoCRF
+	} else if p.VideoCRF < 0 || p.VideoCRF > 51 {
+		p.VideoCRF = def.VideoCRF
+	}
+	if p.AudioBitrateKbps <= 0 {
+		p.AudioBitrateKbps = def.AudioBitrateKbps
+	}
+	if p.StartupTimeout <= 0 {
+		p.StartupTimeout = def.StartupTimeout
+	}
+	if p.MaxHeight < 0 {
+		p.MaxHeight = 0
+	}
+	return p
 }
 
 func (m *Manager) removeSession(target *session) {
@@ -191,9 +386,13 @@ type viewer struct {
 }
 
 type session struct {
-	channelID string
-	opts      Options
-	onIdle    func()
+	channelID    string
+	epoch        uint64
+	opts         Options
+	profile      TranscodeProfile
+	readyTimeout time.Duration
+	onIdle       func()
+	onFinish     func(Status)
 
 	mu         sync.Mutex
 	upstream   Upstream
@@ -207,6 +406,7 @@ type session struct {
 	pmts       map[uint16][]byte
 	pumpCancel context.CancelFunc
 	stopCh     chan struct{}
+	doneCh     chan struct{}
 	stopped    atomic.Bool
 
 	readyCh   chan struct{}
@@ -215,24 +415,68 @@ type session struct {
 	everReady atomic.Bool
 }
 
-func newSession(channelID string, upstream Upstream, opts Options, onIdle func()) *session {
+func newSession(channelID string, upstream Upstream, opts Options, profile TranscodeProfile, onIdle func()) *session {
+	readyTimeout := opts.ConnTimeout
+	if upstream.Transcode {
+		readyTimeout = profile.StartupTimeout
+		if readyTimeout <= 0 {
+			readyTimeout = 30 * time.Second
+		}
+	}
 	return &session{
-		channelID: channelID,
-		opts:      opts,
-		onIdle:    onIdle,
-		upstream:  upstream,
-		viewers:   make(map[int64]*viewer),
-		pmts:      make(map[uint16][]byte),
-		state:     "connecting",
-		stopCh:    make(chan struct{}),
-		readyCh:   make(chan struct{}),
+		channelID:    channelID,
+		opts:         opts,
+		profile:      profile,
+		readyTimeout: readyTimeout,
+		onIdle:       onIdle,
+		upstream:     upstream,
+		viewers:      make(map[int64]*viewer),
+		pmts:         make(map[uint16][]byte),
+		state:        "connecting",
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
+		readyCh:      make(chan struct{}),
 	}
 }
 
-func (s *session) updateUpstream(u Upstream) {
+func (s *session) waitDone(ctx context.Context) error {
+	select {
+	case <-s.doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// finishStatus reports the terminal status before stop() forces state to idle.
+func (s *session) finishStatus() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.upstream = u
+	st := Status{
+		ChannelID: s.channelID,
+		Viewers:   0,
+		LastError: s.lastError,
+		BytesSent: s.bytesSent,
+	}
+	if !s.connected.IsZero() {
+		st.ConnectedAt = s.connected.UTC().Format(time.RFC3339)
+	}
+	// Intentional teardown unblocks waiters with errSessionStopped; do not sticky it.
+	if errors.Is(s.readyErr, errSessionStopped) {
+		st.State = "idle"
+		st.LastError = ""
+		return st
+	}
+	if s.readyErr != nil || s.state == "error" || (!s.everReady.Load() && strings.TrimSpace(s.lastError) != "") {
+		st.State = "error"
+		if st.LastError == "" && s.readyErr != nil {
+			st.LastError = s.readyErr.Error()
+		}
+		return st
+	}
+	st.State = "idle"
+	st.LastError = ""
+	return st
 }
 
 func (s *session) addViewer(bufferSize int) *viewer {
@@ -309,7 +553,8 @@ func (s *session) stop() {
 		cancel()
 	}
 	if !s.everReady.Load() {
-		s.failReady(ErrUpstreamFailed)
+		// Unblock Subscribe waiters without treating teardown as an upstream failure.
+		s.failReady(errSessionStopped)
 	}
 }
 
@@ -318,15 +563,29 @@ func (s *session) status() Status {
 	defer s.mu.Unlock()
 	state := s.state
 	viewers := len(s.viewers)
+	lastError := s.lastError
 	// Never report "streaming"/"connecting" with zero viewers.
 	if viewers == 0 && (state == "streaming" || state == "connecting") {
 		state = "idle"
+	}
+	switch {
+	case errors.Is(s.readyErr, errSessionStopped):
+		if viewers == 0 {
+			state = "idle"
+			lastError = ""
+		}
+	case s.readyErr != nil && !s.everReady.Load():
+		// Keep readiness failures visible until reaped into sticky status.
+		state = "error"
+		if lastError == "" {
+			lastError = s.readyErr.Error()
+		}
 	}
 	st := Status{
 		ChannelID: s.channelID,
 		State:     state,
 		Viewers:   viewers,
-		LastError: s.lastError,
+		LastError: lastError,
 		BytesSent: s.bytesSent,
 	}
 	if !s.connected.IsZero() {
@@ -363,15 +622,22 @@ func (s *session) failReady(err error) {
 func (s *session) waitReady(ctx context.Context) error {
 	select {
 	case <-s.readyCh:
-		return s.readyErr
+		return mapReadyErr(s.readyErr)
 	default:
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-s.readyCh:
-		return s.readyErr
+		return mapReadyErr(s.readyErr)
 	}
+}
+
+func mapReadyErr(err error) error {
+	if errors.Is(err, errSessionStopped) {
+		return ErrUpstreamFailed
+	}
+	return err
 }
 
 // beginPump returns a context cancelled when the session stops or the last viewer leaves.
@@ -416,10 +682,15 @@ func (s *session) run() {
 		if !s.everReady.Load() {
 			s.failReady(ErrUpstreamFailed)
 		}
+		st := s.finishStatus()
 		s.stop()
 		if s.onIdle != nil {
 			s.onIdle()
 		}
+		if s.onFinish != nil {
+			s.onFinish(st)
+		}
+		close(s.doneCh)
 	}()
 
 	go s.readyDeadline()
@@ -484,7 +755,11 @@ func (s *session) run() {
 }
 
 func (s *session) readyDeadline() {
-	t := time.NewTimer(s.opts.ConnTimeout)
+	timeout := s.readyTimeout
+	if timeout <= 0 {
+		timeout = s.opts.ConnTimeout
+	}
+	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case <-s.readyCh:
@@ -504,6 +779,10 @@ func (s *session) pumpOnce() error {
 
 	ctx, cancel := s.beginPump()
 	defer cancel()
+
+	if up.Transcode {
+		return s.pumpTranscode(ctx)
+	}
 
 	s.setState("connecting", "")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, up.URL, nil)

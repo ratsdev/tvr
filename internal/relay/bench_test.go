@@ -42,7 +42,7 @@ func BenchmarkFanout100Viewers(b *testing.B) {
 		IdleTimeout: 2 * time.Second,
 		ConnTimeout: 2 * time.Second,
 	})
-	b.Cleanup(mgr.Close)
+	b.Cleanup(func() { _ = mgr.Close(context.Background()) })
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

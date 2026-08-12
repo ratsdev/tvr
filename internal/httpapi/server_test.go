@@ -30,7 +30,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, *epg.Service) 
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	rel := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
-	t.Cleanup(rel.Close)
+	t.Cleanup(func() { _ = rel.Close(context.Background()) })
 	epgSvc := epg.New(st, dir, 1<<20, nil)
 	webFS, err := fs.Sub(web.Content, ".")
 	if err != nil {
@@ -42,6 +42,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, *epg.Service) 
 	cfg := config.Config{
 		BaseURL:          srv.URL,
 		DataDir:          dir,
+		FFmpegPath:       "ffmpeg",
 		RelayBufferSize:  64,
 		RelayIdleTimeout: 2 * time.Second,
 		RelayConnTimeout: time.Second,
@@ -266,7 +267,7 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	rel := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
-	t.Cleanup(rel.Close)
+	t.Cleanup(func() { _ = rel.Close(context.Background()) })
 	epgSvc := epg.New(st, dir, 1<<20, nil)
 	webFS, err := fs.Sub(web.Content, ".")
 	if err != nil {
@@ -277,6 +278,7 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 		BaseURL:          "",
 		TrustProxy:       false,
 		DataDir:          dir,
+		FFmpegPath:       "ffmpeg",
 		RelayBufferSize:  64,
 		RelayIdleTimeout: 2 * time.Second,
 		RelayConnTimeout: time.Second,
@@ -546,5 +548,73 @@ func TestEPGSourceEnableWakesRefresh(t *testing.T) {
 	}
 	if err := epgSvc.DrainPending(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSettingsGetAndPut(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	res, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("status=%d", res.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["transcode"].(map[string]any); !ok {
+		t.Fatalf("missing transcode: %#v", got)
+	}
+	body := `{"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	upd, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upd.Body.Close()
+	if upd.StatusCode != 200 {
+		b, _ := io.ReadAll(upd.Body)
+		t.Fatalf("status=%d body=%s", upd.StatusCode, b)
+	}
+}
+
+func TestChannelPutOmitsTranscodePreservesFlag(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	on := true
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live", UpstreamURL: "http://example.com/a.ts", TranscodeEnabled: &on,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"Live 2","logo_url":"","upstream_url":"http://example.com/a.ts","headers":{}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var out store.Channel
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.TranscodeEnabled || out.Name != "Live 2" {
+		t.Fatalf("out=%+v", out)
 	}
 }
