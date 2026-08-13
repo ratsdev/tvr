@@ -49,6 +49,29 @@ func TestBuildFFmpegArgsOrderAndScale(t *testing.T) {
 	}
 }
 
+func TestBuildFFmpegArgsLiveMPEGTSTiming(t *testing.T) {
+	args, err := buildFFmpegArgs(DefaultTranscodeProfile(), Upstream{URL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, "\x00")
+	if strings.Contains(joined, "zerolatency") {
+		t.Fatal("zerolatency causes MPEG-TS PCR/PTS jitter")
+	}
+	if got := args[indexOf(args, "-vsync")+1]; got != "cfr" {
+		t.Fatalf("vsync=%q", got)
+	}
+	if got := args[indexOf(args, "-g")+1]; got != "50" {
+		t.Fatalf("g=%q", got)
+	}
+	if got := args[indexOf(args, "-muxdelay")+1]; got != "0.1" {
+		t.Fatalf("muxdelay=%q", got)
+	}
+	if got := args[indexOf(args, "-pcr_period")+1]; got != "20" {
+		t.Fatalf("pcr_period=%q", got)
+	}
+}
+
 func TestBuildFFmpegArgsEvenScaleWithoutCap(t *testing.T) {
 	args, err := buildFFmpegArgs(DefaultTranscodeProfile(), Upstream{URL: "http://example.com/a.ts"})
 	if err != nil {

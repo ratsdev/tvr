@@ -56,6 +56,7 @@ func buildFFmpegArgs(profile TranscodeProfile, up Upstream) ([]string, error) {
 		"-nostdin",
 		"-protocol_whitelist", "http,https,tcp,tls,crypto,httpproxy",
 		"-user_agent", ua,
+		"-fflags", "+genpts",
 	}
 	if headerBlock.Len() > 0 {
 		args = append(args, "-headers", headerBlock.String())
@@ -66,17 +67,22 @@ func buildFFmpegArgs(profile TranscodeProfile, up Upstream) ([]string, error) {
 		"-map", "0:a:0?",
 		"-sn",
 		"-dn",
+		"-vsync", "cfr",
 		"-c:v", "libx264",
 		"-preset", profile.VideoPreset,
-		"-tune", "zerolatency",
 		"-crf", fmt.Sprintf("%d", profile.VideoCRF),
 		"-pix_fmt", "yuv420p",
+		"-g", "50",
+		"-keyint_min", "25",
+		"-sc_threshold", "0",
 		"-c:a", "aac",
 		"-b:a", fmt.Sprintf("%dk", profile.AudioBitrateKbps),
 		"-vf", scaleFilter(profile.MaxHeight),
 		"-mpegts_flags", "+resend_headers",
-		"-muxdelay", "0",
-		"-muxpreload", "0",
+		"-muxdelay", "0.1",
+		"-muxpreload", "0.1",
+		"-pcr_period", "20",
+		"-avoid_negative_ts", "make_zero",
 		"-f", "mpegts",
 		"pipe:1",
 	)
