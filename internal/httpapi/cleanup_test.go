@@ -14,16 +14,18 @@ import (
 	"time"
 
 	"github.com/jqjiang/tvr/internal/config"
-	"github.com/jqjiang/tvr/internal/epg"
-	"github.com/jqjiang/tvr/internal/relay"
-	"github.com/jqjiang/tvr/internal/store"
-	"github.com/jqjiang/tvr/web"
+	"github.com/jqjiang/tvr/internal/core/epg"
+	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/jqjiang/tvr/internal/core/stream"
+	"github.com/jqjiang/tvr/internal/core/transcode"
+	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/jqjiang/tvr/static"
 )
 
 func TestUpdateChannelCleanupTimeout(t *testing.T) {
-	prev := channelRelayCleanupTimeout
-	channelRelayCleanupTimeout = 30 * time.Millisecond
-	t.Cleanup(func() { channelRelayCleanupTimeout = prev })
+	prev := channelStreamCleanupTimeout
+	channelStreamCleanupTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { channelStreamCleanupTimeout = prev })
 
 	helper := writeIgnoreTermHelper(t)
 	dir := t.TempDir()
@@ -33,11 +35,11 @@ func TestUpdateChannelCleanupTimeout(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	rel := relay.NewManager(relay.Options{
+	rel := stream.NewManager(stream.Options{
 		BufferSize:  32,
 		IdleTimeout: 5 * time.Second,
 		ConnTimeout: time.Second,
-		TranscodeProfile: relay.TranscodeProfile{
+		TranscodeProfile: transcode.Profile{
 			FFmpegPath:       helper,
 			StartupTimeout:   2 * time.Second,
 			VideoCRF:         23,
@@ -47,7 +49,7 @@ func TestUpdateChannelCleanupTimeout(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = rel.Close(context.Background()) })
 
-	webFS, err := fs.Sub(web.Content, ".")
+	staticFS, err := fs.Sub(static.Content, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestUpdateChannelCleanupTimeout(t *testing.T) {
 		RelayConnTimeout: time.Second,
 		EPGMaxBytes:      1 << 20,
 		EPGDefaultEvery:  time.Hour,
-	}, st, rel, epgSvc, nil, webFS, nil)
+	}, st, rel, epgSvc, nil, staticFS, nil)
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 
@@ -75,9 +77,9 @@ func TestUpdateChannelCleanupTimeout(t *testing.T) {
 
 	subCtx, subCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer subCancel()
-	r, err := rel.Subscribe(subCtx, ch.ID, relay.Upstream{
+	r, err := rel.Subscribe(subCtx, ch.ID, upstream.Fixed(upstream.Upstream{
 		URL: ch.UpstreamURL, Transcode: true, Revision: ch.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,7 @@ func TestUpdateChannelCleanupTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body := `{"name":"Live","logo_url":"","upstream_url":"http://example.com/b.ts","headers":{},"transcode_enabled":true}`
+	body := `{"name":"Live","logo_url":"","upstreams":[{"url":"http://example.com/b.ts"}],"headers":{},"transcode_enabled":true}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

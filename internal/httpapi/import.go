@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/m3u"
-	"github.com/jqjiang/tvr/internal/store"
+	"github.com/jqjiang/tvr/internal/core/m3u"
+	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/jqjiang/tvr/internal/utils"
 )
 
 type importRelayRequest struct {
@@ -107,7 +107,7 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 			if _, ok := seenEPG[epgURL]; ok {
 				continue
 			}
-			if !isValidHTTPURL(epgURL) {
+			if !m3u.IsHTTPStream(epgURL) {
 				warnings = append(warnings, fmt.Sprintf("skipped invalid epg url %q", epgURL))
 				continue
 			}
@@ -147,17 +147,17 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 			}
 			switch len(matches) {
 			case 0:
-				unmatched = appendUnique(unmatched, tvgID)
+				unmatched = utils.AppendUnique(unmatched, tvgID)
 			case 1:
 				id := matches[0]
 				spec.Entries[i].EPGSourceID = &id
 			default:
-				ambiguous = appendUnique(ambiguous, tvgID)
+				ambiguous = utils.AppendUnique(ambiguous, tvgID)
 			}
 		}
 	}
 
-	imported, err := s.app.ImportRelay(r.Context(), spec)
+	imported, err := s.workflows.ImportRelay(r.Context(), spec)
 	if err != nil {
 		s.writeWorkflowError(w, err)
 		return
@@ -190,17 +190,6 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, result)
 }
 
-func isValidHTTPURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	return u.Host != ""
-}
-
 func (s *Server) fetchM3U(ctx context.Context, rawURL string) (string, error) {
 	if !m3u.IsHTTPStream(rawURL) {
 		return "", fmt.Errorf("url must be http(s)")
@@ -229,13 +218,4 @@ func (s *Server) fetchM3U(ctx context.Context, rawURL string) (string, error) {
 		return "", fmt.Errorf("playlist exceeds %d bytes", maxBytes)
 	}
 	return string(data), nil
-}
-
-func appendUnique(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
-			return list
-		}
-	}
-	return append(list, v)
 }

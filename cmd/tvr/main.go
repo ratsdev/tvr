@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/app"
 	"github.com/jqjiang/tvr/internal/config"
-	"github.com/jqjiang/tvr/internal/epg"
+	"github.com/jqjiang/tvr/internal/core/epg"
+	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/jqjiang/tvr/internal/core/stream"
+	"github.com/jqjiang/tvr/internal/core/transcode"
+	"github.com/jqjiang/tvr/internal/core/workflows"
 	"github.com/jqjiang/tvr/internal/httpapi"
-	"github.com/jqjiang/tvr/internal/relay"
-	"github.com/jqjiang/tvr/internal/store"
-	"github.com/jqjiang/tvr/web"
+	"github.com/jqjiang/tvr/static"
 )
 
 func main() {
@@ -47,12 +48,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	rel := relay.NewManager(relay.Options{
+	live := stream.NewManager(stream.Options{
 		BufferSize:  cfg.RelayBufferSize,
 		IdleTimeout: cfg.RelayIdleTimeout,
 		ConnTimeout: cfg.RelayConnTimeout,
 		Logger:      logger,
-		TranscodeProfile: relay.TranscodeProfile{
+		TranscodeProfile: transcode.Profile{
 			FFmpegPath:       cfg.FFmpegPath,
 			VideoCRF:         settings.VideoCRF,
 			VideoPreset:      settings.VideoPreset,
@@ -66,19 +67,19 @@ func main() {
 	epgCtx, epgCancel := context.WithCancel(context.Background())
 	epgSvc.Start(epgCtx)
 
-	webFS, err := fs.Sub(web.Content, ".")
+	staticFS, err := fs.Sub(static.Content, ".")
 	if err != nil {
-		logger.Error("web assets", "err", err)
+		logger.Error("static assets", "err", err)
 		os.Exit(1)
 	}
 
-	workflows := &app.Workflows{
+	wf := &workflows.Workflows{
 		Store:              st,
 		EPG:                epgSvc,
 		DefaultEPGInterval: cfg.EPGDefaultEvery,
 		Logger:             logger,
 	}
-	api := httpapi.New(cfg, st, rel, epgSvc, workflows, webFS, logger)
+	api := httpapi.New(cfg, st, live, epgSvc, wf, staticFS, logger)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           api.Handler(),
@@ -111,8 +112,8 @@ func main() {
 
 	// 1) Stop accepting new stream subscriptions and reap active sessions/ffmpeg.
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	if err := rel.Close(closeCtx); err != nil {
-		logger.Warn("relay close", "err", err)
+	if err := live.Close(closeCtx); err != nil {
+		logger.Warn("stream manager close", "err", err)
 	}
 	closeCancel()
 

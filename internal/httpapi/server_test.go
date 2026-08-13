@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"github.com/jqjiang/tvr/internal/config"
-	"github.com/jqjiang/tvr/internal/epg"
+	"github.com/jqjiang/tvr/internal/core/epg"
+	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/jqjiang/tvr/internal/core/stream"
 	"github.com/jqjiang/tvr/internal/httpapi"
-	"github.com/jqjiang/tvr/internal/relay"
-	"github.com/jqjiang/tvr/internal/store"
-	"github.com/jqjiang/tvr/web"
+	"github.com/jqjiang/tvr/static"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *store.Store, *epg.Service) {
@@ -29,10 +29,10 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, *epg.Service) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	rel := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
+	rel := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
 	t.Cleanup(func() { _ = rel.Close(context.Background()) })
 	epgSvc := epg.New(st, dir, 1<<20, nil)
-	webFS, err := fs.Sub(web.Content, ".")
+	staticFS, err := fs.Sub(static.Content, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.Store, *epg.Service) 
 		EPGMaxBytes:      1 << 20,
 		EPGDefaultEvery:  time.Hour,
 	}
-	api := httpapi.New(cfg, st, rel, epgSvc, nil, webFS, nil)
+	api := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
 	srv.Config.Handler = api.Handler()
 	t.Cleanup(srv.Close)
 	return srv, st, epgSvc
@@ -266,10 +266,10 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	rel := relay.NewManager(relay.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
+	rel := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
 	t.Cleanup(func() { _ = rel.Close(context.Background()) })
 	epgSvc := epg.New(st, dir, 1<<20, nil)
-	webFS, err := fs.Sub(web.Content, ".")
+	staticFS, err := fs.Sub(static.Content, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 		EPGMaxBytes:      1 << 20,
 		EPGDefaultEvery:  time.Hour,
 	}
-	api := httpapi.New(cfg, st, rel, epgSvc, nil, webFS, nil)
+	api := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 
@@ -306,7 +306,7 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 	}
 
 	cfg.TrustProxy = true
-	api2 := httpapi.New(cfg, st, rel, epgSvc, nil, webFS, nil)
+	api2 := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
 	srv2 := httptest.NewServer(api2.Handler())
 	t.Cleanup(srv2.Close)
 	req2, _ := http.NewRequest(http.MethodGet, srv2.URL+"/api/health", nil)
@@ -326,7 +326,7 @@ func TestPublicBaseURLTrustProxy(t *testing.T) {
 
 	cfg.BaseURL = "https://fixed.example/iptv"
 	cfg.TrustProxy = false
-	api3 := httpapi.New(cfg, st, rel, epgSvc, nil, webFS, nil)
+	api3 := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
 	srv3 := httptest.NewServer(api3.Handler())
 	t.Cleanup(srv3.Close)
 	res3, err := http.Get(srv3.URL + "/api/health")
@@ -616,5 +616,361 @@ func TestChannelPutOmitsTranscodePreservesFlag(t *testing.T) {
 	}
 	if !out.TranscodeEnabled || out.Name != "Live 2" {
 		t.Fatalf("out=%+v", out)
+	}
+}
+
+func TestChannelPutOmitsUpstreamsPreservesBackups(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name:           "Live",
+		UpstreamPolicy: store.UpstreamPolicyRandom,
+		Upstreams: []store.ChannelUpstream{
+			{URL: "http://example.com/a.ts"},
+			{URL: "http://example.com/b.ts"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"Live 2","logo_url":"","upstream_url":"http://example.com/a.ts","headers":{}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var out store.Channel
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != "Live 2" || out.UpstreamPolicy != store.UpstreamPolicyRandom {
+		t.Fatalf("out=%+v", out)
+	}
+	if len(out.Upstreams) != 2 || out.Upstreams[0].URL != "http://example.com/a.ts" || out.Upstreams[1].URL != "http://example.com/b.ts" {
+		t.Fatalf("upstreams=%+v", out.Upstreams)
+	}
+	if out.Upstreams[0].ID != ch.Upstreams[0].ID || out.Upstreams[1].ID != ch.Upstreams[1].ID {
+		t.Fatalf("ids rewritten: before=%+v after=%+v", ch.Upstreams, out.Upstreams)
+	}
+}
+
+func TestChannelPutOmitsHeadersPreservesMap(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name:        "Live",
+		UpstreamURL: "http://example.com/a.ts",
+		Headers:     map[string]string{"User-Agent": "tvr"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"Live 2","logo_url":"","upstream_url":"http://example.com/a.ts"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var out store.Channel
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != "Live 2" || out.Headers["User-Agent"] != "tvr" {
+		t.Fatalf("out=%+v", out)
+	}
+}
+
+func liveTSHandler() http.Handler {
+	pkt := make([]byte, 188)
+	pkt[0] = 0x47
+	pkt[1] = 0x40
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp2t")
+		flusher, _ := w.(http.Flusher)
+		for {
+			if r.Context().Err() != nil {
+				return
+			}
+			if _, err := w.Write(pkt); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(8 * time.Millisecond)
+		}
+	})
+}
+
+func TestChannelTestSelectsUpstream(t *testing.T) {
+	var hitsA, hitsB int
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitsA++
+		pkt := bytes.Repeat([]byte{0x47}, 188)
+		pkt[0] = 0x47
+		w.Header().Set("Content-Type", "video/mp2t")
+		_, _ = w.Write(bytes.Repeat(pkt, 4))
+	}))
+	t.Cleanup(srvA.Close)
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitsB++
+		pkt := bytes.Repeat([]byte{0x47}, 188)
+		pkt[0] = 0x47
+		w.Header().Set("Content-Type", "video/mp2t")
+		_, _ = w.Write(bytes.Repeat(pkt, 4))
+	}))
+	t.Cleanup(srvB.Close)
+
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live",
+		Upstreams: []store.ChannelUpstream{
+			{URL: srvA.URL + "/primary.ts"},
+			{URL: srvB.URL + "/backup.ts"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := http.Post(srv.URL+"/api/channels/"+ch.ID+"/test", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var env map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&env); err != nil {
+		t.Fatal(err)
+	}
+	if env["upstream_id"] != ch.Upstreams[0].ID {
+		t.Fatalf("default test should hit primary: %+v", env)
+	}
+	if hitsA != 1 || hitsB != 0 {
+		t.Fatalf("default hits A=%d B=%d", hitsA, hitsB)
+	}
+
+	body, _ := json.Marshal(map[string]string{"upstream_id": ch.Upstreams[1].ID})
+	res2, err := http.Post(srv.URL+"/api/channels/"+ch.ID+"/test", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	if err := json.NewDecoder(res2.Body).Decode(&env); err != nil {
+		t.Fatal(err)
+	}
+	if env["upstream_id"] != ch.Upstreams[1].ID {
+		t.Fatalf("row test: %+v", env)
+	}
+	if hitsB != 1 {
+		t.Fatalf("expected backup hit, A=%d B=%d", hitsA, hitsB)
+	}
+}
+
+func TestChannelTestRandomPolicyVaries(t *testing.T) {
+	var hitsA, hitsB int
+	handler := func(hits *int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			*hits++
+			pkt := make([]byte, 188)
+			pkt[0] = 0x47
+			w.Header().Set("Content-Type", "video/mp2t")
+			_, _ = w.Write(bytes.Repeat(pkt, 4))
+		}
+	}
+	srvA := httptest.NewServer(handler(&hitsA))
+	t.Cleanup(srvA.Close)
+	srvB := httptest.NewServer(handler(&hitsB))
+	t.Cleanup(srvB.Close)
+
+	srv, st, _ := newTestServer(t)
+	ch, err := st.CreateChannel(context.Background(), store.ChannelInput{
+		Name:           "Live",
+		UpstreamPolicy: store.UpstreamPolicyRandom,
+		Upstreams: []store.ChannelUpstream{
+			{URL: srvA.URL + "/a.ts"},
+			{URL: srvB.URL + "/b.ts"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[string]int{}
+	for i := 0; i < 40; i++ {
+		res, err := http.Post(srv.URL+"/api/channels/"+ch.ID+"/test", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&env); err != nil {
+			res.Body.Close()
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		id, _ := env["upstream_id"].(string)
+		seen[id]++
+	}
+	if hitsA == 0 || hitsB == 0 || len(seen) < 2 {
+		t.Fatalf("random test always hit one url: hits A=%d B=%d ids=%v", hitsA, hitsB, seen)
+	}
+}
+
+func TestRelayStatusOmitsRawUpstreamURL(t *testing.T) {
+	secretPath := "/secret-stream.ts"
+	mux := http.NewServeMux()
+	mux.Handle(secretPath, liveTSHandler())
+	up2 := httptest.NewServer(mux)
+	t.Cleanup(up2.Close)
+
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name:        "Live",
+		UpstreamURL: up2.URL + secretPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayRow, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relayRow.ID)
+	if _, err := st.AddMembership(ctx, relayRow.ID, store.MembershipInput{
+		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx2, http.MethodGet, srv.URL+"/stream/"+ch.ID, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	buf := make([]byte, 188)
+	if _, err := io.ReadFull(res.Body, buf); err != nil {
+		t.Fatal(err)
+	}
+
+	stRes, err := http.Get(srv.URL + "/api/relay/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stRes.Body.Close()
+	raw, _ := io.ReadAll(stRes.Body)
+	text := string(raw)
+	if strings.Contains(text, secretPath) || strings.Contains(text, up2.URL) {
+		t.Fatalf("status leaked raw upstream url: %s", text)
+	}
+	if !strings.Contains(text, `"upstream_host"`) || !strings.Contains(text, `"upstream_id"`) {
+		t.Fatalf("status=%s", text)
+	}
+}
+
+func TestChannelPutOverlayInvalidatesSession(t *testing.T) {
+	up := httptest.NewServer(liveTSHandler())
+	t.Cleanup(up.Close)
+	backup := httptest.NewServer(liveTSHandler())
+	t.Cleanup(backup.Close)
+
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name:           "Live",
+		UpstreamPolicy: store.UpstreamPolicyFallback,
+		Upstreams: []store.ChannelUpstream{
+			{URL: up.URL + "/a.ts"},
+			{URL: backup.URL + "/b.ts"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx2, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx2, http.MethodGet, srv.URL+"/stream/"+ch.ID, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	buf := make([]byte, 188)
+	if _, err := io.ReadFull(res.Body, buf); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"name":              "Live",
+		"logo_url":          "",
+		"upstream_policy":   store.UpstreamPolicyFallback,
+		"fixed_upstream_id": ch.FixedUpstreamID,
+		"upstreams": []map[string]any{
+			{"id": ch.Upstreams[0].ID, "url": ch.Upstreams[0].URL, "headers": map[string]string{}},
+			{"id": ch.Upstreams[1].ID, "url": ch.Upstreams[1].URL, "headers": map[string]string{"X-Overlay": "1"}},
+		},
+		"headers": map[string]string{},
+	})
+	put, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	put.Header.Set("Content-Type", "application/json")
+	upd, err := http.DefaultClient.Do(put)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upd.Body.Close()
+	if upd.StatusCode != 200 {
+		b, _ := io.ReadAll(upd.Body)
+		t.Fatalf("put status=%d body=%s", upd.StatusCode, b)
+	}
+	var saved store.Channel
+	if err := json.NewDecoder(upd.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Upstreams[1].Headers["X-Overlay"] != "1" {
+		t.Fatalf("overlay not saved: %+v", saved.Upstreams)
+	}
+	if saved.UpstreamURL != ch.UpstreamURL {
+		t.Fatalf("primary changed %q -> %q", ch.UpstreamURL, saved.UpstreamURL)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	gotErr := false
+	for time.Now().Before(deadline) {
+		if _, err := res.Body.Read(buf); err != nil {
+			gotErr = true
+			break
+		}
+	}
+	if !gotErr {
+		t.Fatal("overlay change should invalidate the live session")
 	}
 }

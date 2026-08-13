@@ -2,15 +2,13 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os/exec"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/relay"
-	"github.com/jqjiang/tvr/internal/store"
+	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/jqjiang/tvr/internal/core/transcode"
 )
 
 type settingsResponse struct {
@@ -66,7 +64,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	// report failure after settings were already committed.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := s.relay.ApplyProfile(ctx, relay.TranscodeProfile{
+	if err := s.live.ApplyProfile(ctx, transcode.Profile{
 		FFmpegPath:       s.cfg.FFmpegPath,
 		VideoCRF:         saved.VideoCRF,
 		VideoPreset:      saved.VideoPreset,
@@ -102,36 +100,4 @@ func (s *Server) settingsResponse(settings store.TranscodeSettings) settingsResp
 			EPGDefaultInterval: s.cfg.EPGDefaultEvery.String(),
 		},
 	}
-}
-
-func (s *Server) subscribeChannel(ctx context.Context, ch store.Channel) (io.ReadCloser, error) {
-	var last error
-	// Retry briefly across the window where a channel save has committed a new
-	// updated_at but PublishChannel has not yet installed that revision.
-	for attempt := 0; attempt < 8; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(5 * time.Millisecond):
-			}
-			fresh, getErr := s.store.GetChannel(ctx, ch.ID)
-			if getErr != nil {
-				return nil, getErr
-			}
-			ch = fresh
-		}
-		up := relay.Upstream{
-			URL:       ch.UpstreamURL,
-			Headers:   ch.Headers,
-			Transcode: ch.TranscodeEnabled,
-			Revision:  ch.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		}
-		reader, err := s.relay.Subscribe(ctx, ch.ID, up)
-		if err == nil || !errors.Is(err, relay.ErrStaleRevision) {
-			return reader, err
-		}
-		last = err
-	}
-	return nil, last
 }

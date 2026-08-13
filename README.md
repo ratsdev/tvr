@@ -83,7 +83,7 @@ There is **no authentication**. Designed for a trusted LAN. The Settings API is 
 
 ```bash
 go test ./...
-go test -race ./internal/relay ./internal/store ./internal/epg ./internal/httpapi
+go test -race ./internal/core/stream ./internal/core/store ./internal/core/epg ./internal/httpapi
 go build -o bin/tvr ./cmd/tvr
 ```
 
