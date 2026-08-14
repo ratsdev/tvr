@@ -359,6 +359,19 @@
     </form>
   </dialog>
 
+  <dialog id="group-dialog">
+    <form method="dialog">
+      <h3 id="group-dialog-title">New Group</h3>
+      <input type="hidden" id="group-id" />
+      <label>Name<input id="group-name" required /></label>
+      <div class="actions">
+        <button type="button" id="group-cancel">Cancel</button>
+        <button class="primary" id="group-save">Create</button>
+      </div>
+      <p id="group-error" class="error"></p>
+    </form>
+  </dialog>
+
   <dialog id="member-dialog">
     <form method="dialog">
       <h3 id="member-dialog-title">Relay channel</h3>

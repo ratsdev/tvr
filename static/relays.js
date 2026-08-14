@@ -251,6 +251,16 @@ async function loadMemberTargets(relayId, member) {
   return true;
 }
 
+function openGroupDialog(group) {
+  document.getElementById("group-dialog-title").textContent = group ? "Rename Group" : "New Group";
+  document.getElementById("group-save").textContent = group ? "Save" : "Create";
+  document.getElementById("group-id").value = group?.id || "";
+  document.getElementById("group-name").value = group?.name || "New Group";
+  document.getElementById("group-error").textContent = "";
+  document.getElementById("group-dialog").showModal();
+  document.getElementById("group-name").select();
+}
+
 async function openMemberDialog(member, channelId) {
   const relayWrap = document.getElementById("member-relay-wrap");
   const relaySel = document.getElementById("member-relay");
@@ -420,14 +430,29 @@ function wireRelays() {
       toast.success("Relay saved");
     } catch (err) { toast.error("Save failed", err.message); }
   });
-  document.getElementById("btn-add-group").addEventListener("click", async () => {
-    const name = prompt("Group name", "New group");
-    if (!name) return;
+  document.getElementById("btn-add-group").addEventListener("click", () => {
+    if (!state.currentRelay) return;
+    openGroupDialog(null);
+  });
+  document.getElementById("group-cancel").addEventListener("click", () => document.getElementById("group-dialog").close());
+  document.getElementById("group-save").addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (!state.currentRelay) return;
+    const errEl = document.getElementById("group-error");
+    const name = document.getElementById("group-name").value.trim();
+    const id = document.getElementById("group-id").value;
+    if (!name) { errEl.textContent = "Enter a group name"; return; }
+    errEl.textContent = "";
     try {
-      await api(`/api/relays/${state.currentRelay.id}/groups`, { method: "POST", body: JSON.stringify({ name }) });
+      if (id) {
+        await api(`/api/relays/${state.currentRelay.id}/groups/${id}`, { method: "PUT", body: JSON.stringify({ name }) });
+      } else {
+        await api(`/api/relays/${state.currentRelay.id}/groups`, { method: "POST", body: JSON.stringify({ name }) });
+      }
+      document.getElementById("group-dialog").close();
       await refreshRelayLineup();
-      toast.success("Group added", name);
-    } catch (err) { toast.error("Add group failed", err.message); }
+      toast.success(id ? "Group renamed" : "Group added", name);
+    } catch (err) { errEl.textContent = err.message; toast.error(id ? "Rename failed" : "Add group failed", err.message); }
   });
   document.getElementById("btn-add-member").addEventListener("click", async () => {
     if (!state.channels.length) { toast.info("Add channels first"); return; }
@@ -525,14 +550,7 @@ function wireRelays() {
     if (!(t instanceof HTMLElement) || !state.currentRelay) return;
     if (t.dataset.renameGroup) {
       const g = state.currentRelay.groups.find((x) => String(x.id) === t.dataset.renameGroup);
-      const name = prompt("Group name", g?.name || "");
-      if (!name) return;
-      try {
-        await api(`/api/relays/${state.currentRelay.id}/groups/${t.dataset.renameGroup}`, {
-          method: "PUT", body: JSON.stringify({ name }),
-        });
-        await refreshRelayLineup();
-      } catch (err) { toast.error("Rename group failed", err.message); }
+      if (g) openGroupDialog(g);
     } else if (t.dataset.delGroup) {
       if (!confirm("Delete group?")) return;
       try {
