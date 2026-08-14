@@ -3,9 +3,12 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -695,7 +698,11 @@ func TestSettingsGetAndPut(t *testing.T) {
 	if _, ok := got["transcode"].(map[string]any); !ok {
 		t.Fatalf("missing transcode: %#v", got)
 	}
-	body := `{"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
+	brand, _ := got["brand"].(map[string]any)
+	if brand["icon"] != "" || brand["title"] != "IPTV Relay" {
+		t.Fatalf("default brand=%#v", got["brand"])
+	}
+	body := `{"brand":{"icon":"https://example.com/logo.png","title":"My Relay"},"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -709,6 +716,342 @@ func TestSettingsGetAndPut(t *testing.T) {
 	if upd.StatusCode != 200 {
 		b, _ := io.ReadAll(upd.Body)
 		t.Fatalf("status=%d body=%s", upd.StatusCode, b)
+	}
+	var saved map[string]any
+	if err := json.NewDecoder(upd.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	savedBrand, _ := saved["brand"].(map[string]any)
+	if savedBrand["icon"] != "https://example.com/logo.png" || savedBrand["title"] != "My Relay" {
+		t.Fatalf("saved brand=%#v", saved["brand"])
+	}
+}
+
+func TestSettingsBrandIconUploadPersistsFile(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	body := `{"brand":{"icon":"` + dataURL + `","title":"My Relay"},"transcode":{"video_crf":23,"video_preset":"veryfast","audio_bitrate_kbps":128,"max_height":0,"startup_timeout_seconds":30}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var saved map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&saved); err != nil {
+		t.Fatal(err)
+	}
+	icon, _ := saved["brand"].(map[string]any)["icon"].(string)
+	if !strings.HasPrefix(icon, "/brand-icon") {
+		t.Fatalf("icon=%q", icon)
+	}
+	iconRes, err := http.Get(srv.URL + "/brand-icon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iconRes.Body.Close()
+	if iconRes.StatusCode != 200 {
+		t.Fatalf("brand-icon status=%d", iconRes.StatusCode)
+	}
+	if _, err := png.Decode(iconRes.Body); err != nil {
+		t.Fatalf("brand-icon is not png: %v", err)
+	}
+}
+
+func TestSettingsBrandIconResetRemovesFile(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	put := func(icon string) map[string]any {
+		t.Helper()
+		body := `{"brand":{"icon":"` + icon + `","title":"IPTV Relay"},"transcode":{"video_crf":23,"video_preset":"veryfast","audio_bitrate_kbps":128,"max_height":0,"startup_timeout_seconds":30}}`
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			b, _ := io.ReadAll(res.Body)
+			t.Fatalf("status=%d body=%s", res.StatusCode, b)
+		}
+		var saved map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&saved); err != nil {
+			t.Fatal(err)
+		}
+		return saved
+	}
+	if icon, _ := put(dataURL)["brand"].(map[string]any)["icon"].(string); !strings.HasPrefix(icon, "/brand-icon") {
+		t.Fatalf("upload icon=%q", icon)
+	}
+	saved := put("")
+	if icon, _ := saved["brand"].(map[string]any)["icon"].(string); icon != "" {
+		t.Fatalf("reset icon=%q", icon)
+	}
+	iconRes, err := http.Get(srv.URL + "/brand-icon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iconRes.Body.Close()
+	if iconRes.StatusCode != 404 {
+		t.Fatalf("expected removed brand-icon, status=%d", iconRes.StatusCode)
+	}
+}
+
+func TestSettingsTranscodeOnlyKeepsUpload(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	put := func(body string) map[string]any {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			b, _ := io.ReadAll(res.Body)
+			t.Fatalf("status=%d body=%s", res.StatusCode, b)
+		}
+		var saved map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&saved); err != nil {
+			t.Fatal(err)
+		}
+		return saved
+	}
+	if icon, _ := put(`{"brand":{"icon":"` + dataURL + `","title":"My Relay"},"transcode":{"video_crf":23,"video_preset":"veryfast","audio_bitrate_kbps":128,"max_height":0,"startup_timeout_seconds":30}}`)["brand"].(map[string]any)["icon"].(string); !strings.HasPrefix(icon, "/brand-icon") {
+		t.Fatal("expected uploaded icon")
+	}
+	saved := put(`{"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`)
+	tr, _ := saved["transcode"].(map[string]any)
+	if tr["video_crf"] != float64(28) {
+		t.Fatalf("transcode=%#v", tr)
+	}
+	icon, _ := saved["brand"].(map[string]any)["icon"].(string)
+	if !strings.HasPrefix(icon, "/brand-icon") {
+		t.Fatalf("upload should remain, icon=%q", icon)
+	}
+	iconRes, err := http.Get(srv.URL + "/brand-icon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iconRes.Body.Close()
+	if iconRes.StatusCode != 200 {
+		t.Fatalf("brand-icon status=%d", iconRes.StatusCode)
+	}
+}
+
+func TestSettingsBrandRemoteURLRemovesUpload(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	put := func(icon string) {
+		t.Helper()
+		body := `{"brand":{"icon":"` + icon + `","title":"IPTV Relay"},"transcode":{"video_crf":23,"video_preset":"veryfast","audio_bitrate_kbps":128,"max_height":0,"startup_timeout_seconds":30}}`
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			b, _ := io.ReadAll(res.Body)
+			t.Fatalf("status=%d body=%s", res.StatusCode, b)
+		}
+	}
+	put(dataURL)
+	put("https://example.com/logo.png")
+	iconRes, err := http.Get(srv.URL + "/brand-icon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iconRes.Body.Close()
+	if iconRes.StatusCode != 404 {
+		t.Fatalf("expected removed brand-icon after remote URL, status=%d", iconRes.StatusCode)
+	}
+}
+
+func TestSettingsBrandIconRejectsHugeImage(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	img := image.NewRGBA(image.Rect(0, 0, 2049, 8))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	body := `{"brand":{"icon":"` + dataURL + `","title":"My Relay"},"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 400 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	got, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(got.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	tr, _ := out["transcode"].(map[string]any)
+	if tr["video_crf"] != float64(23) {
+		t.Fatalf("transcode should be unchanged, got %#v", tr)
+	}
+}
+
+func TestSettingsInvalidBrandKeepsTranscode(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := `{"brand":{"icon":"data:image/png;base64,@@@","title":"My Relay"},"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 400 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	got, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(got.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	tr, _ := out["transcode"].(map[string]any)
+	if tr["video_crf"] != float64(23) {
+		t.Fatalf("transcode should be unchanged, got %#v", tr)
+	}
+}
+
+func TestSettingsInvalidBrandTitleKeepsTranscode(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body := `{"brand":{"icon":"","title":"line1\nline2"},"transcode":{"video_crf":28,"video_preset":"fast","audio_bitrate_kbps":160,"max_height":720,"startup_timeout_seconds":40}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 400 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	got, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(got.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	tr, _ := out["transcode"].(map[string]any)
+	if tr["video_crf"] != float64(23) {
+		t.Fatalf("transcode should be unchanged, got %#v", tr)
+	}
+}
+
+func TestStaticBrandAndCSSAssets(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	brand, err := http.Get(srv.URL + "/assets/brand.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer brand.Body.Close()
+	if brand.StatusCode != 200 {
+		t.Fatalf("brand.svg status=%d", brand.StatusCode)
+	}
+	css, err := http.Get(srv.URL + "/assets/css/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer css.Body.Close()
+	if css.StatusCode != 200 {
+		t.Fatalf("style.css status=%d", css.StatusCode)
+	}
+}
+
+func TestHealthVersion(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	res, err := http.Get(srv.URL + "/api/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("status=%d", res.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	ver, _ := body["version"].(string)
+	commit, _ := body["commit"].(string)
+	if ver == "" {
+		t.Fatalf("missing version: %#v", body)
+	}
+	if commit != "" && !strings.Contains(ver, "("+commit+")") {
+		t.Fatalf("version %q should include commit %q", ver, commit)
 	}
 }
 

@@ -360,22 +360,5 @@ func headerMapsEqual(a, b map[string]string) bool {
 }
 
 func hasChannelColumn(db *sql.DB, want string) (bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(channels)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == want {
-			return true, rows.Err()
-		}
-	}
-	return false, rows.Err()
+	return hasTableColumn(db, "channels", want)
 }

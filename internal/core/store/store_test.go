@@ -578,6 +578,110 @@ func TestTranscodeSettingsUpdate(t *testing.T) {
 	}
 }
 
+func TestBrandSettingsDefaultAndUpdate(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	got, err := st.GetBrandSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != store.DefaultBrandSettings() {
+		t.Fatalf("default brand=%+v", got)
+	}
+	saved, err := st.UpdateBrandSettings(ctx, store.BrandSettings{Icon: "https://example.com/logo.png", Title: "My Relay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Title != "My Relay" || saved.Icon != "https://example.com/logo.png" {
+		t.Fatalf("saved=%+v", saved)
+	}
+	empty, err := st.UpdateBrandSettings(ctx, store.BrandSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != store.DefaultBrandSettings() {
+		t.Fatalf("empty should normalize to defaults, got %+v", empty)
+	}
+	if _, err := st.UpdateBrandSettings(ctx, store.BrandSettings{Icon: "javascript:alert(1)"}); !errors.Is(err, store.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	if _, err := st.UpdateBrandSettings(ctx, store.BrandSettings{Icon: "/assets/js/app.js"}); !errors.Is(err, store.ErrValidation) {
+		t.Fatalf("expected bundled script rejection, got %v", err)
+	}
+	legacy, err := st.UpdateBrandSettings(ctx, store.BrandSettings{Icon: "/assets/assets/brand.svg", Title: "Legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Icon != store.DefaultBrandIcon || legacy.Title != "Legacy" {
+		t.Fatalf("legacy default icon=%+v", legacy)
+	}
+}
+
+func TestUpdateAppSettingsRejectsBrandWithoutTouchingTranscode(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	_, _, err := st.UpdateAppSettings(ctx, store.TranscodeSettings{
+		VideoCRF: 28, VideoPreset: "fast", AudioBitrateKbps: 160, MaxHeight: 720, StartupTimeoutSeconds: 40,
+	}, &store.BrandSettings{Icon: "javascript:alert(1)", Title: "X"})
+	if !errors.Is(err, store.ErrValidation) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	tr, err := st.GetTranscodeSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.VideoCRF != 23 {
+		t.Fatalf("transcode should be unchanged, got %+v", tr)
+	}
+	saved, brand, err := st.UpdateAppSettings(ctx, store.TranscodeSettings{
+		VideoCRF: 28, VideoPreset: "fast", AudioBitrateKbps: 160, MaxHeight: 720, StartupTimeoutSeconds: 40,
+	}, &store.BrandSettings{Icon: "https://example.com/a.png", Title: "X"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.VideoCRF != 28 || brand.Title != "X" || brand.Icon != "https://example.com/a.png" {
+		t.Fatalf("saved transcode=%+v brand=%+v", saved, brand)
+	}
+}
+
+func TestOpenMigratesBrandSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-brand.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE app_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  video_crf INTEGER NOT NULL DEFAULT 23,
+  video_preset TEXT NOT NULL DEFAULT 'veryfast',
+  audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
+  max_height INTEGER NOT NULL DEFAULT 0,
+  startup_timeout_seconds INTEGER NOT NULL DEFAULT 30
+);
+INSERT INTO app_settings (id) VALUES (1);
+`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	got, err := st.GetBrandSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != store.DefaultBrandSettings() {
+		t.Fatalf("migrated brand=%+v", got)
+	}
+}
+
 func TestImportRelayPreservesTranscodeFlag(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()

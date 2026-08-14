@@ -12,6 +12,7 @@ import (
 )
 
 type settingsResponse struct {
+	Brand           store.BrandSettings     `json:"brand"`
 	Transcode       store.TranscodeSettings `json:"transcode"`
 	FFmpegPath      string                  `json:"ffmpeg_path"`
 	FFmpegAvailable bool                    `json:"ffmpeg_available"`
@@ -19,6 +20,7 @@ type settingsResponse struct {
 }
 
 type settingsUpdateRequest struct {
+	Brand     *store.BrandSettings    `json:"brand,omitempty"`
 	Transcode store.TranscodeSettings `json:"transcode"`
 }
 
@@ -43,7 +45,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.settingsResponse(settings))
+	brand, err := s.store.GetBrandSettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.settingsResponse(settings, brand))
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -55,9 +62,29 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
 
-	saved, err := s.store.UpdateTranscodeSettings(r.Context(), in.Transcode)
+	if err := store.ValidateTranscodeSettings(in.Transcode); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	brandPlan, err := s.prepareBrandUpdate(in.Brand)
 	if err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	brandPlan, err = s.stageBrandIcon(brandPlan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("could not write brand icon: %w", err))
+		return
+	}
+
+	saved, brand, err := s.store.UpdateAppSettings(r.Context(), in.Transcode, in.Brand)
+	if err != nil {
+		s.abandonBrandIcon(brandPlan)
+		writeStoreError(w, err)
+		return
+	}
+	if err := s.commitBrandIcon(brandPlan); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("settings saved but brand icon file update failed: %w", err))
 		return
 	}
 	// Detach cleanup from the client request so abort/navigation cannot
@@ -75,13 +102,17 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("settings saved but active relay cleanup failed: %w", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.settingsResponse(saved))
+	writeJSON(w, http.StatusOK, s.settingsResponse(saved, brand))
 }
 
-func (s *Server) settingsResponse(settings store.TranscodeSettings) settingsResponse {
+func (s *Server) settingsResponse(settings store.TranscodeSettings, brand store.BrandSettings) settingsResponse {
 	path := s.cfg.FFmpegPath
 	_, lookErr := exec.LookPath(path)
 	return settingsResponse{
+		Brand: store.BrandSettings{
+			Icon:  s.publicBrandIcon(brand.Icon),
+			Title: brand.Title,
+		},
 		Transcode:       settings,
 		FFmpegPath:      path,
 		FFmpegAvailable: lookErr == nil,

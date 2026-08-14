@@ -23,11 +23,11 @@ async function pollStatus() {
 async function boot() {
   const healthP = api("/api/health").then((health) => {
     state.baseURL = (health.base_url || location.origin || "").replace(/\/$/, "");
-    document.getElementById("sidebar-version").textContent = health.version ? `tvr ${health.version}` : "tvr";
+    document.getElementById("sidebar-version").textContent = (health.version || "dev").trim() || "dev";
   }).catch(() => {
     state.baseURL = location.origin;
   });
-  await Promise.all([healthP, loadChannels(), loadEPG(), loadRelays()]);
+  await Promise.all([healthP, loadSettings().catch(() => {}), loadChannels(), loadEPG(), loadRelays()]);
   pollStatus().catch(() => {});
   setInterval(() => { pollStatus().catch(() => {}); }, 5000);
   document.addEventListener("visibilitychange", () => {

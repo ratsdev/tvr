@@ -56,26 +56,36 @@ a:hover { text-decoration: underline; }
   flex-direction: column;
   padding: 14px 12px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px 14px;
+  gap: 12px;
+  padding: 6px 6px 18px;
+  min-width: 0;
 }
 .brand-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 10px;
   background: var(--primary);
-  color: var(--primary-fg);
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 700;
+  overflow: hidden;
+  box-sizing: border-box;
+  object-fit: cover;
+  display: block;
 }
-.brand-name { font-weight: 700; font-size: 15px; }
+.brand-name {
+  font-weight: 700;
+  font-size: 18px;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .nav-group { margin-bottom: 14px; }
 .nav-label {
   font-size: 11px;
@@ -99,10 +109,27 @@ a:hover { text-decoration: underline; }
 .nav-item:hover { background: var(--panel-2); }
 .nav-item.active { background: var(--panel-2); font-weight: 600; }
 .sidebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: auto;
   padding: 10px 8px 0;
   border-top: 1px solid var(--border);
   font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+}
+.sidebar-foot-name {
+  flex: 0 0 auto;
+}
+.sidebar-foot-ver {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* —— Shell —— */
@@ -1018,6 +1045,11 @@ dialog form { display: grid; gap: 10px; }
   font-size: 12px;
 }
 #channel-policy-hint { margin: -4px 0 0; }
+.settings-stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
 .settings-page {
   display: grid;
   gap: 12px;
@@ -1066,6 +1098,28 @@ dialog form { display: grid; gap: 10px; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px 12px;
   min-width: 0;
+}
+.settings-span { grid-column: 1 / -1; }
+.settings-brand-icon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-brand-preview {
+  flex: 0 0 auto;
+}
+.settings-brand-icon-fields {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-brand-icon-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 .settings-readonly {
   display: grid;

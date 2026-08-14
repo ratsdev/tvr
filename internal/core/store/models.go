@@ -57,6 +57,17 @@ type TranscodeSettings struct {
 	StartupTimeoutSeconds int    `json:"startup_timeout_seconds"`
 }
 
+const (
+	DefaultBrandIcon  = "/assets/brand.svg"
+	DefaultBrandTitle = "IPTV Relay"
+)
+
+// BrandSettings is the singleton nav brand shown in the admin UI.
+type BrandSettings struct {
+	Icon  string `json:"icon"`
+	Title string `json:"title"`
+}
+
 // EPGSource is a remote XMLTV feed.
 type EPGSource struct {
 	ID              int64         `json:"id"`

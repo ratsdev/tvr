@@ -103,7 +103,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
   video_preset TEXT NOT NULL DEFAULT 'veryfast',
   audio_bitrate_kbps INTEGER NOT NULL DEFAULT 128,
   max_height INTEGER NOT NULL DEFAULT 0,
-  startup_timeout_seconds INTEGER NOT NULL DEFAULT 30
+  startup_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+  brand_icon TEXT NOT NULL DEFAULT '',
+  brand_title TEXT NOT NULL DEFAULT 'IPTV Relay'
 );
 
 CREATE TABLE IF NOT EXISTS relays (
@@ -144,6 +146,9 @@ CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(ch
 		return err
 	}
 	if err := s.ensureChannelUpstreams(); err != nil {
+		return err
+	}
+	if err := s.ensureBrandSettingsColumns(); err != nil {
 		return err
 	}
 	if err := s.ensureAppSettingsRow(); err != nil {
@@ -263,12 +268,55 @@ func (s *Store) ensureChannelTranscodeColumn() error {
 	return err
 }
 
+func (s *Store) ensureBrandSettingsColumns() error {
+	hasIcon, err := hasTableColumn(s.db, "app_settings", "brand_icon")
+	if err != nil {
+		return err
+	}
+	if !hasIcon {
+		if _, err := s.db.Exec(`ALTER TABLE app_settings ADD COLUMN brand_icon TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	hasTitle, err := hasTableColumn(s.db, "app_settings", "brand_title")
+	if err != nil {
+		return err
+	}
+	if !hasTitle {
+		if _, err := s.db.Exec(`ALTER TABLE app_settings ADD COLUMN brand_title TEXT NOT NULL DEFAULT 'IPTV Relay'`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) ensureAppSettingsRow() error {
 	_, err := s.db.Exec(`
 INSERT OR IGNORE INTO app_settings (
-  id, video_crf, video_preset, audio_bitrate_kbps, max_height, startup_timeout_seconds
-) VALUES (1, 23, 'veryfast', 128, 0, 30)`)
+  id, video_crf, video_preset, audio_bitrate_kbps, max_height, startup_timeout_seconds, brand_icon, brand_title
+) VALUES (1, 23, 'veryfast', 128, 0, 30, '', 'IPTV Relay')`)
 	return err
+}
+
+func hasTableColumn(db *sql.DB, table, want string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == want {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
 }
 
 // ensureChannelNameUniqueIndex upgrades a legacy non-unique name index (or adds one)

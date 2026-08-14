@@ -6,7 +6,11 @@ RUN apk add --no-cache git ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tvr ./cmd/tvr
+ARG VERSION=dev
+ARG COMMIT=
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+  -ldflags="-s -w -X github.com/ratsdev/tvr/internal/version.Version=${VERSION} -X github.com/ratsdev/tvr/internal/version.Commit=${COMMIT}" \
+  -o /out/tvr ./cmd/tvr
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata ffmpeg \

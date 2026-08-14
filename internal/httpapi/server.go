@@ -20,6 +20,7 @@ import (
 	"github.com/ratsdev/tvr/internal/core/store"
 	"github.com/ratsdev/tvr/internal/core/stream"
 	"github.com/ratsdev/tvr/internal/core/workflows"
+	"github.com/ratsdev/tvr/internal/version"
 )
 
 // channelStreamCleanupTimeout bounds waiting for active live sessions after
@@ -119,14 +120,26 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	s.mux.HandleFunc("GET /brand-icon", s.handleGetBrandIcon)
 
 	s.mux.HandleFunc("GET /r/{slug}/playlist.m3u", s.handleRelayPlaylist)
 	s.mux.HandleFunc("GET /r/{slug}/epg.xml", s.handleRelayEPG)
 	s.mux.HandleFunc("GET /stream/{channelId}", s.handleChannelStream)
 
-	fileServer := http.FileServer(http.FS(s.staticFS))
-	s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", fileServer))
+	s.mountStatic()
 	s.mux.HandleFunc("GET /{$}", s.handleIndex)
+}
+
+func (s *Server) mountStatic() {
+	// css/ and js/ live at the static root; images live in static/assets/.
+	// Mount the more specific prefixes first so /assets/brand.svg is not
+	// looked up as static/brand.svg.
+	fileServer := http.FileServer(http.FS(s.staticFS))
+	s.mux.Handle("GET /assets/css/", http.StripPrefix("/assets/", fileServer))
+	s.mux.Handle("GET /assets/js/", http.StripPrefix("/assets/", fileServer))
+	if assetFS, err := fs.Sub(s.staticFS, "assets"); err == nil {
+		s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assetFS))))
+	}
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +156,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"base_url": s.publicBaseURL(r),
+		"version":  version.Label(),
+		"commit":   version.ShortCommit(),
 	})
 }
 

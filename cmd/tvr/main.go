@@ -17,6 +17,7 @@ import (
 	"github.com/ratsdev/tvr/internal/core/transcode"
 	"github.com/ratsdev/tvr/internal/core/workflows"
 	"github.com/ratsdev/tvr/internal/httpapi"
+	"github.com/ratsdev/tvr/internal/version"
 	"github.com/ratsdev/tvr/static"
 )
 
@@ -95,6 +96,8 @@ func main() {
 			baseURL = "(auto from request)"
 		}
 		logger.Info("tvr listening",
+			"version", version.Label(),
+			"commit", version.ShortCommit(),
 			"addr", cfg.ListenAddr,
 			"base_url", baseURL,
 			"trust_proxy", cfg.TrustProxy,
