@@ -596,4 +596,46 @@ function wireChannels() {
     }
   });
 
+  document.getElementById("btn-import-channels").addEventListener("click", () => {
+    document.getElementById("import-channels-content").value = "";
+    document.getElementById("import-channels-file").value = "";
+    document.getElementById("import-channels-error").textContent = "";
+    document.getElementById("import-channels-dialog").showModal();
+  });
+  document.getElementById("import-channels-cancel").addEventListener("click", () => {
+    document.getElementById("import-channels-dialog").close();
+  });
+  document.getElementById("import-channels-file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    document.getElementById("import-channels-content").value = await file.text();
+  });
+  document.getElementById("import-channels-save").addEventListener("click", async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById("import-channels-error");
+    const saveBtn = document.getElementById("import-channels-save");
+    errEl.textContent = "";
+    saveBtn.disabled = true;
+    const loading = toast.loading("Importing Channels…");
+    try {
+      const res = await api("/api/channels/import", {
+        method: "POST",
+        body: JSON.stringify({ content: document.getElementById("import-channels-content").value }),
+      });
+      document.getElementById("import-channels-dialog").close();
+      await loadChannels();
+      const parts = [
+        `${res.channels_created} created`,
+        `${res.channels_reused} reused`,
+        `${res.upstreams_added} added`,
+      ];
+      loading.update("success", "Channels imported", parts.join(", "));
+    } catch (err) {
+      loading.update("error", "Import failed", err.message);
+      errEl.textContent = err.message;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
 }

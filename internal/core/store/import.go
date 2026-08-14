@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,6 +43,21 @@ type ImportRelayResult struct {
 	GroupsCreated      int
 	EPGImported        int
 	EPGSourceIDs       []int64
+}
+
+// ImportChannelEntry is one preclassified TXT row ready for persistence.
+type ImportChannelEntry struct {
+	Name string
+	URL  string
+}
+
+// ImportChannelsResult summarizes a successful channel-list import.
+type ImportChannelsResult struct {
+	Created        int
+	Reused         int
+	UpstreamsAdded int
+	UpdatedIDs     []string
+	Warnings       []string
 }
 
 // ImportRelay creates a relay and related records in one transaction.
@@ -219,6 +235,91 @@ func containsInt64(ids []int64, want int64) bool {
 		}
 	}
 	return false
+}
+
+// ImportChannels creates Channels or appends upstreams from a TXT list in one transaction.
+func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry) (ImportChannelsResult, error) {
+	var result ImportChannelsResult
+	updated := map[string]struct{}{}
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		for _, ent := range entries {
+			name := strings.TrimSpace(ent.Name)
+			rawURL := strings.TrimSpace(ent.URL)
+			owner, err := findChannelByUpstreamURLTx(ctx, tx, rawURL)
+			if err == nil {
+				if channelNameKey(owner.Name) == channelNameKey(name) {
+					result.Reused++
+				} else {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("url already used by %s", owner.Name))
+				}
+				continue
+			}
+			if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			existing, err := findChannelByNameTx(ctx, tx, name)
+			if err == nil {
+				if err := appendChannelUpstreamTx(ctx, tx, existing.ID, rawURL); err != nil {
+					return err
+				}
+				result.UpstreamsAdded++
+				updated[existing.ID] = struct{}{}
+				continue
+			}
+			if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			if _, err := createChannelTx(ctx, tx, ChannelInput{Name: name, UpstreamURL: rawURL}); err != nil {
+				return err
+			}
+			result.Created++
+		}
+		return nil
+	})
+	if err != nil {
+		return ImportChannelsResult{}, err
+	}
+	for id := range updated {
+		result.UpdatedIDs = append(result.UpdatedIDs, id)
+	}
+	sort.Strings(result.UpdatedIDs)
+	return result, nil
+}
+
+func findChannelByNameTx(ctx context.Context, q querier, name string) (Channel, error) {
+	row := q.QueryRowContext(ctx, `
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
+	ch, err := scanChannel(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Channel{}, ErrNotFound
+	}
+	return ch, err
+}
+
+func appendChannelUpstreamTx(ctx context.Context, q querier, channelID, rawURL string) error {
+	item, err := normalizeChannelUpstream(ChannelUpstream{URL: rawURL}, map[string]struct{}{})
+	if err != nil {
+		return err
+	}
+	var next int
+	if err := q.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(sort_order)+1, 0) FROM channel_upstreams WHERE channel_id = ?`, channelID).Scan(&next); err != nil {
+		return err
+	}
+	headersJSON, err := json.Marshal(normalizeHeaders(item.Headers))
+	if err != nil {
+		return err
+	}
+	if _, err := q.ExecContext(ctx, `
+INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order)
+VALUES (?, ?, ?, ?, ?)`,
+		item.ID, channelID, item.URL, string(headersJSON), next); err != nil {
+		return channelConflictErr(err)
+	}
+	_, err = q.ExecContext(ctx, `UPDATE channels SET updated_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), channelID)
+	return err
 }
 
 func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {

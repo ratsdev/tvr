@@ -56,6 +56,7 @@
                   <strong id="channel-count">Channels</strong>
                   <div class="row">
                     <button type="button" id="btn-test-all-channels">Test All</button>
+                    <button type="button" id="btn-import-channels">Import</button>
                     <button type="button" class="primary" id="btn-new-channel">Add</button>
                   </div>
                 </div>
@@ -401,6 +402,19 @@
         <button class="primary" id="member-save">Save</button>
       </div>
       <p id="member-error" class="error"></p>
+    </form>
+  </dialog>
+
+  <dialog id="import-channels-dialog">
+    <form method="dialog">
+      <h3>Import Channels</h3>
+      <label>Upload file<input id="import-channels-file" type="file" accept=".txt,text/plain" /></label>
+      <label>Or paste<textarea id="import-channels-content" rows="6" placeholder="CHANNEL_NAME,http://…"></textarea></label>
+      <div class="actions">
+        <button type="button" id="import-channels-cancel">Cancel</button>
+        <button class="primary" id="import-channels-save">Import</button>
+      </div>
+      <p id="import-channels-error" class="error"></p>
     </form>
   </dialog>
 

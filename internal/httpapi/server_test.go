@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1098,5 +1099,121 @@ func TestChannelPutOverlayInvalidatesSession(t *testing.T) {
 	}
 	if !gotErr {
 		t.Fatal("overlay change should invalidate the live session")
+	}
+}
+
+func TestImportChannelsTXT(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	body, _ := json.Marshal(map[string]any{
+		"content": "# skip me\n\nAlpha,http://example.com/a.ts\nBeta,udp://example.com/b.ts\n",
+	})
+	res, err := http.Post(srv.URL+"/api/channels/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	var out struct {
+		ChannelsCreated int      `json:"channels_created"`
+		Warnings        []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ChannelsCreated != 1 {
+		t.Fatalf("created=%d body=%s", out.ChannelsCreated, raw)
+	}
+	if len(out.Warnings) != 1 || !strings.Contains(out.Warnings[0], "Beta") {
+		t.Fatalf("warnings=%v", out.Warnings)
+	}
+	channels, err := st.ListChannels(context.Background())
+	if err != nil || len(channels) != 1 || channels[0].Name != "Alpha" {
+		t.Fatalf("channels=%+v err=%v", channels, err)
+	}
+}
+
+func TestImportChannelsTXTMalformed(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	body, _ := json.Marshal(map[string]any{"content": "not-a-pair\n"})
+	res, err := http.Post(srv.URL+"/api/channels/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(string(raw), "line 1") {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+}
+
+func TestImportChannelsTXTAppendPublishesRevision(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	rel := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
+	t.Cleanup(func() { _ = rel.Close(context.Background()) })
+	epgSvc := epg.New(st, dir, 1<<20, nil)
+	staticFS, err := fs.Sub(static.Content, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not configured", 500)
+	}))
+	cfg := config.Config{
+		BaseURL:          srv.URL,
+		DataDir:          dir,
+		FFmpegPath:       "ffmpeg",
+		RelayBufferSize:  64,
+		RelayIdleTimeout: 2 * time.Second,
+		RelayConnTimeout: time.Second,
+		EPGMaxBytes:      1 << 20,
+		EPGDefaultEvery:  time.Hour,
+	}
+	api := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
+	srv.Config.Handler = api.Handler()
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "News", UpstreamURL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRev := ch.UpdatedAt.UTC().Format(time.RFC3339Nano)
+
+	body, _ := json.Marshal(map[string]any{"content": "News,http://example.com/b.ts\n"})
+	res, err := http.Post(srv.URL+"/api/channels/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	var out struct {
+		UpstreamsAdded int `json:"upstreams_added"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if out.UpstreamsAdded != 1 {
+		t.Fatalf("added=%d body=%s", out.UpstreamsAdded, raw)
+	}
+	fresh, err := st.GetChannel(ctx, ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.Upstreams) != 2 {
+		t.Fatalf("upstreams=%+v", fresh.Upstreams)
+	}
+	src := fresh.StreamSource()
+	src.Revision = oldRev
+	if _, err := rel.Subscribe(ctx, fresh.ID, src); !errors.Is(err, stream.ErrStaleRevision) {
+		t.Fatalf("want stale revision after publish, got %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ratsdev/tvr/internal/core/channeltxt"
 	"github.com/ratsdev/tvr/internal/core/m3u"
 	"github.com/ratsdev/tvr/internal/core/store"
 	"github.com/ratsdev/tvr/internal/utils"
@@ -219,4 +220,74 @@ func (s *Server) fetchM3U(ctx context.Context, rawURL string) (string, error) {
 		return "", fmt.Errorf("playlist exceeds %d bytes", maxBytes)
 	}
 	return string(data), nil
+}
+
+type importChannelsRequest struct {
+	Content string `json:"content"`
+}
+
+type importChannelsResult struct {
+	ChannelsCreated int      `json:"channels_created"`
+	ChannelsReused  int      `json:"channels_reused"`
+	UpstreamsAdded  int      `json:"upstreams_added"`
+	Warnings        []string `json:"warnings,omitempty"`
+}
+
+func (s *Server) handleImportChannels(w http.ResponseWriter, r *http.Request) {
+	var in importChannelsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	parsed, err := channeltxt.Parse(strings.NewReader(in.Content))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var warnings []string
+	ready := make([]store.ImportChannelEntry, 0, len(parsed))
+	for _, ent := range parsed {
+		if !m3u.IsHTTPStream(ent.URL) {
+			warnings = append(warnings, fmt.Sprintf("skipped non-http(s) url for %q", ent.Name))
+			continue
+		}
+		ready = append(ready, store.ImportChannelEntry{Name: ent.Name, URL: strings.TrimSpace(ent.URL)})
+	}
+	if len(ready) == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("no Channels to import"))
+		return
+	}
+	imported, err := s.store.ImportChannels(r.Context(), ready)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	warnings = append(warnings, imported.Warnings...)
+
+	if len(imported.UpdatedIDs) > 0 {
+		s.channelMu.Lock()
+		defer s.channelMu.Unlock()
+		for _, id := range imported.UpdatedIDs {
+			ch, err := s.store.GetChannel(r.Context(), id)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
+			err = s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), true)
+			cancel()
+			if err != nil {
+				s.logger.Error("publish channel revision", "channel_id", ch.ID, "err", err)
+				writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channels imported but active relay cleanup failed: %w", err))
+				return
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, importChannelsResult{
+		ChannelsCreated: imported.Created,
+		ChannelsReused:  imported.Reused,
+		UpstreamsAdded:  imported.UpstreamsAdded,
+		Warnings:        warnings,
+	})
 }

@@ -86,6 +86,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/channels", s.handleListChannels)
 	s.mux.HandleFunc("POST /api/channels", s.handleCreateChannel)
+	s.mux.HandleFunc("POST /api/channels/import", s.handleImportChannels)
 	s.mux.HandleFunc("GET /api/channels/{id}", s.handleGetChannel)
 	s.mux.HandleFunc("PUT /api/channels/{id}", s.handleUpdateChannel)
 	s.mux.HandleFunc("DELETE /api/channels/{id}", s.handleDeleteChannel)
