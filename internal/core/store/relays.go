@@ -18,7 +18,7 @@ SELECT id, name, slug, created_at, updated_at FROM relays ORDER BY name COLLATE 
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Relay
+	out := make([]Relay, 0)
 	for rows.Next() {
 		r, err := scanRelay(rows)
 		if err != nil {
@@ -165,16 +165,13 @@ WHERE relay_id = ? ORDER BY sort_order ASC, id ASC`, relayID)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []RelayGroup
+	out := make([]RelayGroup, 0)
 	for rows.Next() {
 		var g RelayGroup
 		if err := rows.Scan(&g.ID, &g.RelayID, &g.Name, &g.SortOrder); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
-	}
-	if out == nil {
-		out = []RelayGroup{}
 	}
 	return out, rows.Err()
 }
@@ -252,21 +249,23 @@ SELECT COUNT(*) FROM relay_memberships WHERE group_id = ? AND relay_id = ?`, gro
 	return nil
 }
 
-// ListRelayMemberships returns memberships with joined channel/group info.
-func (s *Store) ListRelayMemberships(ctx context.Context, relayID int64) ([]RelayMembership, error) {
-	rows, err := s.db.QueryContext(ctx, `
+const membershipSelect = `
 SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
        c.name, c.logo_url, c.upstream_url, g.name
 FROM relay_memberships m
 JOIN channels c ON c.id = m.channel_id
-JOIN relay_groups g ON g.id = m.group_id
+JOIN relay_groups g ON g.id = m.group_id`
+
+// ListRelayMemberships returns memberships with joined channel/group info.
+func (s *Store) ListRelayMemberships(ctx context.Context, relayID int64) ([]RelayMembership, error) {
+	rows, err := s.db.QueryContext(ctx, membershipSelect+`
 WHERE m.relay_id = ?
 ORDER BY g.sort_order ASC, m.sort_order ASC, m.id ASC`, relayID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []RelayMembership
+	out := make([]RelayMembership, 0)
 	for rows.Next() {
 		m, err := scanMembership(rows)
 		if err != nil {
@@ -274,21 +273,12 @@ ORDER BY g.sort_order ASC, m.sort_order ASC, m.id ASC`, relayID)
 		}
 		out = append(out, m)
 	}
-	if out == nil {
-		out = []RelayMembership{}
-	}
 	return out, rows.Err()
 }
 
 // GetMembership returns a membership by ID.
 func (s *Store) GetMembership(ctx context.Context, id int64) (RelayMembership, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
-       c.name, c.logo_url, c.upstream_url, g.name
-FROM relay_memberships m
-JOIN channels c ON c.id = m.channel_id
-JOIN relay_groups g ON g.id = m.group_id
-WHERE m.id = ?`, id)
+	row := s.db.QueryRowContext(ctx, membershipSelect+` WHERE m.id = ?`, id)
 	m, err := scanMembership(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RelayMembership{}, ErrNotFound
@@ -340,13 +330,7 @@ UPDATE relay_memberships SET number = ? WHERE id = ? AND relay_id = ?`, i+1, id,
 }
 
 func getMembershipQ(ctx context.Context, q querier, id int64) (RelayMembership, error) {
-	row := q.QueryRowContext(ctx, `
-SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
-       c.name, c.logo_url, c.upstream_url, g.name
-FROM relay_memberships m
-JOIN channels c ON c.id = m.channel_id
-JOIN relay_groups g ON g.id = m.group_id
-WHERE m.id = ?`, id)
+	row := q.QueryRowContext(ctx, membershipSelect+` WHERE m.id = ?`, id)
 	m, err := scanMembership(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RelayMembership{}, ErrNotFound
@@ -628,7 +612,7 @@ ORDER BY g.sort_order ASC, m.sort_order ASC, m.id ASC`, relay.ID)
 	return relay, out, rows.Err()
 }
 
-// ListAllRelayEPGMappings returns all membership EPG bindings for refresh.
+// ListAllRelayEPGMappings returns channel EPG pairs projected onto each owning relay.
 func (s *Store) ListAllRelayEPGMappings(ctx context.Context) ([]RelayEPGMapping, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT r.id, r.slug, c.epg_source_id, c.tvg_id
@@ -640,7 +624,7 @@ WHERE c.epg_source_id IS NOT NULL AND c.tvg_id <> ''`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []RelayEPGMapping
+	out := make([]RelayEPGMapping, 0)
 	for rows.Next() {
 		var m RelayEPGMapping
 		if err := rows.Scan(&m.RelayID, &m.RelaySlug, &m.EPGSourceID, &m.TvgID); err != nil {

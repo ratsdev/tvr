@@ -15,9 +15,6 @@ func (s *Server) handleListRelays(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if relays == nil {
-		relays = []store.Relay{}
-	}
 	type item struct {
 		store.Relay
 		PlaylistURL string `json:"playlist_url"`

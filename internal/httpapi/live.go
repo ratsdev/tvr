@@ -17,7 +17,7 @@ func (s *Server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChannelStream(w http.ResponseWriter, r *http.Request) {
-	channelID, err := pathChannelID(r, "channelId")
+	channelID, err := pathUUID(r, "channelId")
 	if err != nil {
 		http.Error(w, "invalid channel id", http.StatusBadRequest)
 		return

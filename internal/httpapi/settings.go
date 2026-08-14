@@ -99,7 +99,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		MaxHeight:        saved.MaxHeight,
 		StartupTimeout:   time.Duration(saved.StartupTimeoutSeconds) * time.Second,
 	}); err != nil {
-		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("settings saved but active relay cleanup failed: %w", err))
+		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("settings saved but transcoder profile apply failed: %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, s.settingsResponse(saved, brand))

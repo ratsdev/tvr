@@ -212,7 +212,7 @@ type LineupEntry struct {
 	EPGSourceID  *int64
 }
 
-// RelayEPGMapping is a membership EPG binding used for filtering.
+// RelayEPGMapping is a channel EPG pair as seen from one relay lineup.
 type RelayEPGMapping struct {
 	RelayID     int64
 	RelaySlug   string

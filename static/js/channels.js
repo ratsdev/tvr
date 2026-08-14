@@ -179,8 +179,7 @@ function updatePolicyHint() {
 }
 
 function newUpstreamID() {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return "u-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+  return newEntityID("u");
 }
 
 function ensureUpstreamRow(u = {}) {
@@ -359,33 +358,25 @@ function updateChannelMeta(ch) {
   copyBtn.dataset.url = url;
 }
 
-function showChannelDetail({ forceFill = false } = {}) {
-  const empty = document.getElementById("channel-detail-empty");
-  const body = document.getElementById("channel-detail-body");
-  const ch = state.creatingChannel
-    ? null
-    : state.channels.find((c) => c.id === state.selectedChannelId) || null;
-  if (!state.creatingChannel && !ch) {
-    empty.classList.remove("hidden");
-    body.classList.add("hidden");
-    setDetailOpen("channels", false);
-    state.editors.channel.baseline = null;
-    return;
-  }
-  empty.classList.add("hidden");
-  body.classList.remove("hidden");
-  setDetailOpen("channels", true);
-  updateChannelMeta(ch);
-  const fill = shouldFillEditor({
-    activeEntityId: state.creatingChannel ? "new" : state.selectedChannelId,
-    responseEntityId: state.creatingChannel ? "new" : ch?.id,
-    domainDirty: isChannelDirty(),
-    force: forceFill || state.editors.channel.baseline == null,
-  });
-  if (fill) fillChannelForm(ch);
-  else if (!state.creatingChannel && ch) {
-    document.getElementById("channel-detail-title").textContent = ch.name;
-  }
+function channelDetail() {
+  return {
+    tab: "channels",
+    empty: "channel-detail-empty",
+    body: "channel-detail-body",
+    title: "channel-detail-title",
+    list: "channels",
+    selected: "selectedChannelId",
+    creating: "creatingChannel",
+    editor: "channel",
+    isDirty: isChannelDirty,
+    updateMeta: updateChannelMeta,
+    fill: fillChannelForm,
+    render: renderChannelList,
+  };
+}
+
+function showChannelDetail(opts) {
+  showDetail(channelDetail(), opts);
 }
 
 async function loadChannels() {
@@ -393,10 +384,7 @@ async function loadChannels() {
   const channels = await api("/api/channels");
   if (!isCurrentGeneration(gen, state.gens.channels)) return;
   state.channels = channels;
-  if (state.selectedChannelId && !state.channels.some((c) => c.id === state.selectedChannelId)) {
-    state.selectedChannelId = null;
-    state.editors.channel.baseline = null;
-  }
+  dropStaleSelection(channelDetail());
   renderChannelList();
   showChannelDetail({ forceFill: false });
 }
@@ -410,25 +398,14 @@ async function applyChannelSave(saved) {
 }
 
 function applyChannelDeletes(ids) {
-  const cleared = editorClearedByDeletes(state.selectedChannelId, ids);
-  state.channels = removeByIds(state.channels, ids);
-  for (const id of ids) {
+  applyDetailDeletes(channelDetail(), ids, (id) => {
     state.selected.channels.delete(String(id));
     delete state.channelTest[id];
-  }
-  if (cleared) {
-    state.selectedChannelId = null;
-    state.editors.channel.baseline = null;
-  }
-  renderChannelList();
-  if (cleared) showChannelDetail({ forceFill: true });
+  });
 }
 
 function selectChannel(id) {
-  state.creatingChannel = false;
-  state.selectedChannelId = id;
-  renderChannelList();
-  showChannelDetail({ forceFill: true });
+  selectDetail(channelDetail(), id);
 }
 
 const channelTvg = (() => {

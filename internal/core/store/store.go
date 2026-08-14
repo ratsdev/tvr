@@ -485,16 +485,16 @@ func (s *Store) ensureChannelNameUniqueIndex() error {
 	return nil
 }
 
+const channelSelect = `c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at`
+
 // ListChannels returns all global channels.
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
-FROM channels c`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+channelSelect+` FROM channels c`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Channel
+	out := make([]Channel, 0)
 	for rows.Next() {
 		ch, err := scanChannel(rows)
 		if err != nil {
@@ -523,9 +523,7 @@ func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
 	if id == "" {
 		return Channel{}, ErrNotFound
 	}
-	row := s.db.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
-FROM channels c WHERE c.id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+channelSelect+` FROM channels c WHERE c.id = ?`, id)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
@@ -736,6 +734,11 @@ func MappingKey(epgID *int64, tvgID string) string {
 	return fmt.Sprintf("%d\x00%s", *epgID, tvgID)
 }
 
+// HasMapping reports whether a complete EPG pair is set.
+func HasMapping(epgID *int64, tvgID string) bool {
+	return MappingKey(epgID, tvgID) != ""
+}
+
 // ChannelEPGKey is the effective complete EPG pair on a channel, or empty if unbound.
 func ChannelEPGKey(ch Channel) string {
 	return MappingKey(ch.EPGSourceID, ch.TvgID)
@@ -750,7 +753,7 @@ FROM epg_sources ORDER BY name COLLATE NOCASE ASC`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []EPGSource
+	out := make([]EPGSource, 0)
 	for rows.Next() {
 		src, err := scanEPGSource(rows)
 		if err != nil {
@@ -770,7 +773,7 @@ FROM epg_sources WHERE enabled = 1 ORDER BY id ASC`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []EPGSource
+	out := make([]EPGSource, 0)
 	for rows.Next() {
 		src, err := scanEPGSource(rows)
 		if err != nil {

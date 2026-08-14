@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -252,12 +253,44 @@ func pathID(r *http.Request, name string) (int64, error) {
 	return id, nil
 }
 
-func pathChannelID(r *http.Request, name string) (string, error) {
+func pathUUID(r *http.Request, name string) (string, error) {
 	id := strings.TrimSpace(r.PathValue(name))
 	if _, err := uuid.Parse(id); err != nil {
 		return "", fmt.Errorf("invalid %s", name)
 	}
 	return id, nil
+}
+
+func (s *Server) publishChannel(ch store.Channel, invalidate bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
+	defer cancel()
+	return s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), invalidate)
+}
+
+func (s *Server) publishChannelIDs(ids []string, invalidate bool) error {
+	for _, id := range ids {
+		ch, err := s.store.GetChannel(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		if err := s.publishChannel(ch, invalidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) publishLockedChannelIDs(ids []string, invalidate bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+	return s.publishChannelIDs(ids, invalidate)
+}
+
+func writeLiveUpdateTimeout(w http.ResponseWriter, saved string, err error) {
+	writeError(w, http.StatusGatewayTimeout, fmt.Errorf("%s but live session update failed: %w", saved, err))
 }
 
 func decodeJSON(r *http.Request, dst any) error {

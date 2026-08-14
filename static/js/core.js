@@ -77,6 +77,11 @@ function relayURLs(slug) {
   };
 }
 
+function newEntityID(prefix) {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return (prefix || "id") + "-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
 function channelStreamURL(channelID) {
   if (!channelID) return "";
   return `${publicBaseURL()}/stream/${channelID}`;
@@ -316,6 +321,64 @@ function showTab(name) {
 function setDetailOpen(tab, open) {
   const panel = document.querySelector(`#tab-${tab} .md`);
   if (panel) panel.classList.toggle("show-detail", !!open);
+}
+
+function showDetail(cfg, { forceFill = false } = {}) {
+  const creating = !!state[cfg.creating];
+  const selectedId = state[cfg.selected];
+  const entity = creating
+    ? null
+    : (state[cfg.list] || []).find((x) => String(x.id) === String(selectedId)) || null;
+  const empty = document.getElementById(cfg.empty);
+  const body = document.getElementById(cfg.body);
+  if (!creating && !entity) {
+    empty.classList.remove("hidden");
+    body.classList.add("hidden");
+    setDetailOpen(cfg.tab, false);
+    state.editors[cfg.editor].baseline = null;
+    return;
+  }
+  empty.classList.add("hidden");
+  body.classList.remove("hidden");
+  setDetailOpen(cfg.tab, true);
+  cfg.updateMeta(entity);
+  const fill = shouldFillEditor({
+    activeEntityId: creating ? "new" : selectedId,
+    responseEntityId: creating ? "new" : entity?.id,
+    domainDirty: cfg.isDirty(),
+    force: forceFill || state.editors[cfg.editor].baseline == null,
+  });
+  if (fill) cfg.fill(entity);
+  else if (!creating && entity && cfg.title) {
+    document.getElementById(cfg.title).textContent = entity.name;
+  }
+}
+
+function dropStaleSelection(cfg) {
+  const id = state[cfg.selected];
+  if (id == null) return;
+  if ((state[cfg.list] || []).some((x) => String(x.id) === String(id))) return;
+  state[cfg.selected] = null;
+  state.editors[cfg.editor].baseline = null;
+}
+
+function applyDetailDeletes(cfg, ids, onEach) {
+  const cleared = editorClearedByDeletes(state[cfg.selected], ids);
+  state[cfg.list] = removeByIds(state[cfg.list], ids);
+  for (const id of ids) onEach?.(id);
+  if (cleared) {
+    state[cfg.selected] = null;
+    state.editors[cfg.editor].baseline = null;
+  }
+  cfg.render();
+  if (cleared) showDetail(cfg, { forceFill: true });
+}
+
+function selectDetail(cfg, id) {
+  state[cfg.creating] = false;
+  state[cfg.selected] = id;
+  cfg.render();
+  showDetail(cfg, { forceFill: true });
 }
 
 function closeSidebarMobile() {

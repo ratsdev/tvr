@@ -70,7 +70,7 @@ function epgChannelLabel(hit) {
   return name ? `${name} (${id})` : id;
 }
 
-/** Lineup subtitle for a membership EPG binding. Raw text; escape at render time. */
+/** Lineup subtitle for a channel EPG pair. Raw text; escape at render time. */
 function membershipEPGLine(sourceName, tvgID) {
   return `EPG:${sourceName || "—"} ID:${tvgID || "—"}`;
 }

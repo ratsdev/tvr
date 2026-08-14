@@ -91,33 +91,25 @@ function updateEPGMeta(src) {
   document.getElementById("btn-refresh-epg-one").classList.toggle("hidden", state.creatingEPG);
 }
 
-function showEPGDetail({ forceFill = false } = {}) {
-  const empty = document.getElementById("epg-detail-empty");
-  const body = document.getElementById("epg-detail-body");
-  const src = state.creatingEPG
-    ? null
-    : state.epgs.find((e) => e.id === state.selectedEPGId) || null;
-  if (!state.creatingEPG && !src) {
-    empty.classList.remove("hidden");
-    body.classList.add("hidden");
-    setDetailOpen("epgs", false);
-    state.editors.epg.baseline = null;
-    return;
-  }
-  empty.classList.add("hidden");
-  body.classList.remove("hidden");
-  setDetailOpen("epgs", true);
-  updateEPGMeta(src);
-  const fill = shouldFillEditor({
-    activeEntityId: state.creatingEPG ? "new" : state.selectedEPGId,
-    responseEntityId: state.creatingEPG ? "new" : src?.id,
-    domainDirty: isEPGDirty(),
-    force: forceFill || state.editors.epg.baseline == null,
-  });
-  if (fill) fillEPGForm(src);
-  else if (!state.creatingEPG && src) {
-    document.getElementById("epg-detail-title").textContent = src.name;
-  }
+function epgDetail() {
+  return {
+    tab: "epgs",
+    empty: "epg-detail-empty",
+    body: "epg-detail-body",
+    title: "epg-detail-title",
+    list: "epgs",
+    selected: "selectedEPGId",
+    creating: "creatingEPG",
+    editor: "epg",
+    isDirty: isEPGDirty,
+    updateMeta: updateEPGMeta,
+    fill: fillEPGForm,
+    render: renderEPGList,
+  };
+}
+
+function showEPGDetail(opts) {
+  showDetail(epgDetail(), opts);
 }
 
 async function loadEPG({ withStatus = true } = {}) {
@@ -133,10 +125,7 @@ async function loadEPG({ withStatus = true } = {}) {
     if (!isCurrentGeneration(gen, state.gens.epgs)) return;
   }
   state.epgs = sources;
-  if (state.selectedEPGId && !state.epgs.some((e) => e.id === state.selectedEPGId)) {
-    state.selectedEPGId = null;
-    state.editors.epg.baseline = null;
-  }
+  dropStaleSelection(epgDetail());
   renderEPGList();
   showEPGDetail({ forceFill: false });
   const channelSel = document.getElementById("channel-epg-source");
@@ -154,24 +143,13 @@ async function applyEPGSave(saved) {
 }
 
 function applyEPGDeletes(ids) {
-  const cleared = editorClearedByDeletes(state.selectedEPGId, ids);
-  state.epgs = removeByIds(state.epgs, ids);
-  for (const id of ids) {
+  applyDetailDeletes(epgDetail(), ids, (id) => {
     state.selected.epgs.delete(Number(id));
-  }
-  if (cleared) {
-    state.selectedEPGId = null;
-    state.editors.epg.baseline = null;
-  }
-  renderEPGList();
-  if (cleared) showEPGDetail({ forceFill: true });
+  });
 }
 
 function selectEPG(id) {
-  state.creatingEPG = false;
-  state.selectedEPGId = id;
-  renderEPGList();
-  showEPGDetail({ forceFill: true });
+  selectDetail(epgDetail(), id);
 }
 
 function wireEPGs() {

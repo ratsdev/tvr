@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 // ImportRelayEntry is one preclassified playlist entry ready for persistence.
@@ -166,7 +168,7 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 			ch, err := findChannelByUpstreamURLTx(ctx, tx, ent.UpstreamURL)
 			if errors.Is(err, ErrNotFound) {
 				name := nextUniqueChannelName(takenNames, ent.Name)
-				in := ChannelInput{
+				chIn := ChannelInput{
 					Name:        name,
 					LogoURL:     ent.LogoURL,
 					UpstreamURL: ent.UpstreamURL,
@@ -174,10 +176,10 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 				}
 				if srcID != nil && tvg != "" {
 					t := tvg
-					in.EPGSourceID = srcID
-					in.TvgID = &t
+					chIn.EPGSourceID = srcID
+					chIn.TvgID = &t
 				}
-				ch, err = createChannelTx(ctx, tx, in)
+				ch, err = createChannelTx(ctx, tx, chIn)
 				if err != nil {
 					return err
 				}
@@ -186,7 +188,7 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 				return err
 			} else {
 				result.ChannelsReused++
-				if ChannelEPGKey(ch) == "" && srcID != nil && tvg != "" {
+				if !HasMapping(ch.EPGSourceID, ch.TvgID) && srcID != nil && tvg != "" {
 					if err := fillChannelEPGTx(ctx, tx, ch.ID, *srcID, tvg); err != nil {
 						return err
 					}
@@ -236,7 +238,7 @@ func resolveImportChannelEPG(ent ImportRelayEntry, epgIDs []int64) (*int64, stri
 	if tvg == "" || len(epgIDs) == 0 {
 		return nil, ""
 	}
-	if ent.EPGSourceID != nil && containsInt64(epgIDs, *ent.EPGSourceID) {
+	if ent.EPGSourceID != nil && utils.ContainsInt64(epgIDs, *ent.EPGSourceID) {
 		return ent.EPGSourceID, tvg
 	}
 	if len(epgIDs) == 1 {
@@ -251,15 +253,6 @@ func fillChannelEPGTx(ctx context.Context, q querier, channelID string, sourceID
 UPDATE channels SET epg_source_id = ?, tvg_id = ?, updated_at = ? WHERE id = ?`,
 		sourceID, tvg, time.Now().UTC().Format(time.RFC3339Nano), channelID)
 	return err
-}
-
-func containsInt64(ids []int64, want int64) bool {
-	for _, id := range ids {
-		if id == want {
-			return true
-		}
-	}
-	return false
 }
 
 // ImportChannels creates Channels or appends upstreams from a TXT list in one transaction.
@@ -317,9 +310,7 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 }
 
 func findChannelByNameTx(ctx context.Context, q querier, name string) (Channel, error) {
-	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
-FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
+	row := q.QueryRowContext(ctx, `SELECT `+channelSelect+` FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
@@ -365,8 +356,7 @@ VALUES (?, ?, ?, ?, ?, NULL)`,
 
 func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {
 	rawURL = strings.TrimSpace(rawURL)
-	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
+	row := q.QueryRowContext(ctx, `SELECT `+channelSelect+`
 FROM channels c
 WHERE c.upstream_url = ?
    OR EXISTS (SELECT 1 FROM channel_upstreams u WHERE u.channel_id = c.id AND u.url = ? AND u.proxy_id IS NULL)
@@ -424,9 +414,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	if err := insertChannelUpstreamsTx(ctx, q, id, spec); err != nil {
 		return Channel{}, err
 	}
-	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
-FROM channels c WHERE c.id = ?`, id)
+	row := q.QueryRowContext(ctx, `SELECT `+channelSelect+` FROM channels c WHERE c.id = ?`, id)
 	return scanChannel(row)
 }
 

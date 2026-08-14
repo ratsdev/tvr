@@ -120,6 +120,48 @@ func TestUpdateMembershipChannelSwapRebuilds(t *testing.T) {
 	}
 }
 
+func TestUpdateChannelEPGRebuildsOwningRelays(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	epgSvc := epg.New(st, t.TempDir(), 1<<20, nil)
+	wf := &workflows.Workflows{Store: st, EPG: epgSvc, DefaultEPGInterval: time.Hour}
+
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "old.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relay.ID)
+	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	_ = epgSvc.DrainPending(ctx)
+
+	next := "new.id"
+	if _, _, err := wf.UpdateChannel(ctx, ch.ID, store.ChannelInput{
+		Name: ch.Name, EPGSourceID: &src.ID, TvgID: &next,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !epgSvc.Status().Refreshing {
+		t.Fatal("channel epg change should rebuild owning relays")
+	}
+}
+
 func TestImportRelayFillRebuildsOwningRelays(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "tvr.db"))
 	if err != nil {

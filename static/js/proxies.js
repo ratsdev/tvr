@@ -43,8 +43,7 @@ function renderProxyList() {
 }
 
 function newServerID() {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
-  return "s-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+  return newEntityID("s");
 }
 
 function ensureServerRow(s = {}) {
@@ -135,33 +134,25 @@ function updateProxyMeta(p) {
   document.getElementById("btn-del-proxy").classList.toggle("hidden", state.creatingProxy);
 }
 
-function showProxyDetail({ forceFill = false } = {}) {
-  const empty = document.getElementById("proxy-detail-empty");
-  const body = document.getElementById("proxy-detail-body");
-  const p = state.creatingProxy
-    ? null
-    : state.proxies.find((x) => x.id === state.selectedProxyId) || null;
-  if (!state.creatingProxy && !p) {
-    empty.classList.remove("hidden");
-    body.classList.add("hidden");
-    setDetailOpen("proxies", false);
-    state.editors.proxy.baseline = null;
-    return;
-  }
-  empty.classList.add("hidden");
-  body.classList.remove("hidden");
-  setDetailOpen("proxies", true);
-  updateProxyMeta(p);
-  const fill = shouldFillEditor({
-    activeEntityId: state.creatingProxy ? "new" : state.selectedProxyId,
-    responseEntityId: state.creatingProxy ? "new" : p?.id,
-    domainDirty: isProxyDirty(),
-    force: forceFill || state.editors.proxy.baseline == null,
-  });
-  if (fill) fillProxyForm(p);
-  else if (!state.creatingProxy && p) {
-    document.getElementById("proxy-detail-title").textContent = p.name;
-  }
+function proxyDetail() {
+  return {
+    tab: "proxies",
+    empty: "proxy-detail-empty",
+    body: "proxy-detail-body",
+    title: "proxy-detail-title",
+    list: "proxies",
+    selected: "selectedProxyId",
+    creating: "creatingProxy",
+    editor: "proxy",
+    isDirty: isProxyDirty,
+    updateMeta: updateProxyMeta,
+    fill: fillProxyForm,
+    render: renderProxyList,
+  };
+}
+
+function showProxyDetail(opts) {
+  showDetail(proxyDetail(), opts);
 }
 
 async function loadProxies() {
@@ -169,10 +160,7 @@ async function loadProxies() {
   const list = await api("/api/proxies");
   if (!isCurrentGeneration(gen, state.gens.proxies)) return;
   state.proxies = list;
-  if (state.selectedProxyId && !state.proxies.some((p) => p.id === state.selectedProxyId)) {
-    state.selectedProxyId = null;
-    state.editors.proxy.baseline = null;
-  }
+  dropStaleSelection(proxyDetail());
   renderProxyList();
   showProxyDetail({ forceFill: false });
   if (typeof renderChannelUpstreams === "function" && document.getElementById("channel-upstreams")?.children.length) {
@@ -191,22 +179,13 @@ async function applyProxySave(saved) {
 }
 
 function applyProxyDeletes(ids) {
-  const cleared = editorClearedByDeletes(state.selectedProxyId, ids);
-  state.proxies = removeByIds(state.proxies, ids);
-  for (const id of ids) state.selected.proxies.delete(String(id));
-  if (cleared) {
-    state.selectedProxyId = null;
-    state.editors.proxy.baseline = null;
-  }
-  renderProxyList();
-  if (cleared) showProxyDetail({ forceFill: true });
+  applyDetailDeletes(proxyDetail(), ids, (id) => {
+    state.selected.proxies.delete(String(id));
+  });
 }
 
 function selectProxy(id) {
-  state.creatingProxy = false;
-  state.selectedProxyId = id;
-  renderProxyList();
-  showProxyDetail({ forceFill: true });
+  selectDetail(proxyDetail(), id);
 }
 
 function wireProxies() {

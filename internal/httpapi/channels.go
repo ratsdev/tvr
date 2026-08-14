@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/ratsdev/tvr/internal/core/mpegts"
 	"github.com/ratsdev/tvr/internal/core/store"
-	"github.com/ratsdev/tvr/internal/core/workflows"
 )
 
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
@@ -20,14 +18,11 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if channels == nil {
-		channels = []store.Channel{}
-	}
 	writeJSON(w, http.StatusOK, channels)
 }
 
 func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -55,7 +50,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -67,39 +62,22 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	s.channelMu.Lock()
 	defer s.channelMu.Unlock()
-	before, err := s.store.GetChannel(r.Context(), id)
+	before, ch, err := s.workflows.UpdateChannel(r.Context(), id, in)
 	if err != nil {
 		writeStoreError(w, err)
 		return
-	}
-	ch, err := s.store.UpdateChannel(r.Context(), id, in)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	if store.ChannelEPGKey(before) != store.ChannelEPGKey(ch) {
-		ids, err := s.store.ChannelRelayIDs(r.Context(), ch.ID)
-		if err != nil {
-			s.logger.Error("channel epg owners", "channel_id", ch.ID, "err", err)
-		} else {
-			_ = s.workflows.ApplyDerivedWork(r.Context(), workflows.DerivedWork{RebuildRelays: ids})
-		}
 	}
 	invalidate := store.ChannelRelayInvalidate(before, ch)
-	// Detach cleanup from the client request so abort/navigation cannot
-	// report failure after the channel row was already committed.
-	ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
-	defer cancel()
-	if err := s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), invalidate); err != nil {
+	if err := s.publishChannel(ch, invalidate); err != nil {
 		s.logger.Error("publish channel revision", "channel_id", ch.ID, "err", err)
-		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channel saved but active relay cleanup failed: %w", err))
+		writeLiveUpdateTimeout(w, "channel saved", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ch)
 }
 
 func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -114,14 +92,14 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if err := s.live.BlockChannel(ctx, id); err != nil {
 		s.logger.Error("block deleted channel", "channel_id", id, "err", err)
-		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channel deleted but active relay cleanup failed: %w", err))
+		writeLiveUpdateTimeout(w, "channel deleted", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

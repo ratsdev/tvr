@@ -24,7 +24,7 @@ FROM proxies p`)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Proxy
+	out := make([]Proxy, 0)
 	for rows.Next() {
 		p, err := scanProxy(rows)
 		if err != nil {

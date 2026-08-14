@@ -1,7 +1,6 @@
 package upstream
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
 )
@@ -15,16 +14,7 @@ type ProxyRef struct {
 
 // ParseProxyPolicy maps empty to fixed. Unknown values are an error.
 func ParseProxyPolicy(raw string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", PolicyFixed:
-		return PolicyFixed, nil
-	case PolicyRandom:
-		return PolicyRandom, nil
-	case PolicyFailover:
-		return PolicyFailover, nil
-	default:
-		return "", fmt.Errorf("proxy policy must be fixed, random, or failover")
-	}
+	return parsePickPolicy(raw, "proxy", false)
 }
 
 // Join prepends a proxy server prefix to a stream link.

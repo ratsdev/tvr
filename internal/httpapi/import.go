@@ -166,7 +166,7 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.publishImportedChannelRevisions(imported.UpdatedIDs); err != nil {
 		s.logger.Error("publish imported channel revision", "err", err)
-		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("relay imported but active relay cleanup failed: %w", err))
+		writeLiveUpdateTimeout(w, "relay imported", err)
 		return
 	}
 
@@ -269,24 +269,10 @@ func (s *Server) handleImportChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings = append(warnings, imported.Warnings...)
 
-	if len(imported.UpdatedIDs) > 0 {
-		s.channelMu.Lock()
-		defer s.channelMu.Unlock()
-		for _, id := range imported.UpdatedIDs {
-			ch, err := s.store.GetChannel(r.Context(), id)
-			if err != nil {
-				writeStoreError(w, err)
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
-			err = s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), true)
-			cancel()
-			if err != nil {
-				s.logger.Error("publish channel revision", "channel_id", ch.ID, "err", err)
-				writeError(w, http.StatusGatewayTimeout, fmt.Errorf("channels imported but active relay cleanup failed: %w", err))
-				return
-			}
-		}
+	if err := s.publishLockedChannelIDs(imported.UpdatedIDs, true); err != nil {
+		s.logger.Error("publish imported channel revision", "err", err)
+		writeLiveUpdateTimeout(w, "channels imported", err)
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, importChannelsResult{
@@ -298,22 +284,5 @@ func (s *Server) handleImportChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publishImportedChannelRevisions(ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	s.channelMu.Lock()
-	defer s.channelMu.Unlock()
-	for _, id := range ids {
-		ch, err := s.store.GetChannel(context.Background(), id)
-		if err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
-		err = s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), false)
-		cancel()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.publishLockedChannelIDs(ids, false)
 }

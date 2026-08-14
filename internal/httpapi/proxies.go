@@ -2,9 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/ratsdev/tvr/internal/core/store"
 )
@@ -15,14 +13,11 @@ func (s *Server) handleListProxies(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if proxies == nil {
-		proxies = []store.Proxy{}
-	}
 	writeJSON(w, http.StatusOK, proxies)
 }
 
 func (s *Server) handleGetProxy(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -50,7 +45,7 @@ func (s *Server) handleCreateProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -67,11 +62,9 @@ func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
-	defer cancel()
 	var firstPubErr error
 	for _, channelID := range affected {
-		ch, err := s.store.GetChannel(ctx, channelID)
+		ch, err := s.store.GetChannel(context.Background(), channelID)
 		if err != nil {
 			s.logger.Error("load channel after proxy update", "channel_id", channelID, "err", err)
 			if firstPubErr == nil {
@@ -79,7 +72,7 @@ func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if err := s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), true); err != nil {
+		if err := s.publishChannel(ch, true); err != nil {
 			s.logger.Error("publish channel revision after proxy update", "channel_id", ch.ID, "err", err)
 			if firstPubErr == nil {
 				firstPubErr = err
@@ -87,14 +80,14 @@ func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if firstPubErr != nil {
-		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("proxy saved but active relay cleanup failed: %w", firstPubErr))
+		writeLiveUpdateTimeout(w, "proxy saved", firstPubErr)
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
-	id, err := pathChannelID(r, "id")
+	id, err := pathUUID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

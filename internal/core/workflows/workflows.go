@@ -8,6 +8,7 @@ import (
 
 	"github.com/ratsdev/tvr/internal/core/epg"
 	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 // Workflows owns store mutations that enqueue derived EPG work.
@@ -185,6 +186,33 @@ func (w *Workflows) DeleteRelay(ctx context.Context, id int64) error {
 	})
 }
 
+// UpdateChannel persists a channel and rebuilds owning relays when the EPG pair changes.
+// It does not take EPG admission: the HTTP handler still publishes the live revision.
+func (w *Workflows) UpdateChannel(ctx context.Context, id string, in store.ChannelInput) (store.Channel, store.Channel, error) {
+	before, err := w.Store.GetChannel(ctx, id)
+	if err != nil {
+		return store.Channel{}, store.Channel{}, err
+	}
+	after, err := w.Store.UpdateChannel(ctx, id, in)
+	if err != nil {
+		return before, store.Channel{}, err
+	}
+	w.enqueueChannelEPGRebuild(ctx, before, after)
+	return before, after, nil
+}
+
+func (w *Workflows) enqueueChannelEPGRebuild(ctx context.Context, before, after store.Channel) {
+	if store.ChannelEPGKey(before) == store.ChannelEPGKey(after) {
+		return
+	}
+	ids, err := w.Store.ChannelRelayIDs(ctx, after.ID)
+	if err != nil {
+		w.logger().Warn("channel epg owners", "channel_id", after.ID, "err", err)
+		return
+	}
+	_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: ids})
+}
+
 func (w *Workflows) AddMembership(ctx context.Context, relayID int64, in store.MembershipInput) (store.RelayMembership, error) {
 	var m store.RelayMembership
 	err := w.withAdmission(func() error {
@@ -193,7 +221,7 @@ func (w *Workflows) AddMembership(ctx context.Context, relayID int64, in store.M
 		if err != nil {
 			return err
 		}
-		if store.MappingKey(m.EPGSourceID, m.TvgID) != "" {
+		if store.HasMapping(m.EPGSourceID, m.TvgID) {
 			_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: []int64{relayID}})
 		}
 		return nil
@@ -229,7 +257,7 @@ func (w *Workflows) DeleteMembership(ctx context.Context, relayID, membershipID 
 		if err := w.Store.DeleteMembership(ctx, membershipID); err != nil {
 			return err
 		}
-		if store.MappingKey(before.EPGSourceID, before.TvgID) != "" {
+		if store.HasMapping(before.EPGSourceID, before.TvgID) {
 			_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: []int64{relayID}})
 		}
 		return nil
@@ -255,24 +283,11 @@ func (w *Workflows) ImportRelay(ctx context.Context, in store.ImportRelayInput) 
 			ids = append(ids, owners...)
 		}
 		work := DerivedWork{
-			RebuildRelays:  uniqueInt64(ids),
+			RebuildRelays:  utils.UniqueInt64(ids),
 			RefreshSources: append([]int64(nil), imported.EPGSourceIDs...),
 		}
 		_ = w.ApplyDerivedWork(ctx, work)
 		return nil
 	})
 	return imported, err
-}
-
-func uniqueInt64(ids []int64) []int64 {
-	seen := map[int64]struct{}{}
-	out := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	return out
 }

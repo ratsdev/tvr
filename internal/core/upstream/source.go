@@ -50,18 +50,28 @@ func Fixed(up Upstream) Source {
 	}
 }
 
-// ParsePolicy maps empty to fixed. Unknown values are an error.
-func ParsePolicy(raw string) (string, error) {
+func parsePickPolicy(raw, kind string, allowFallback bool) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", PolicyFixed:
 		return PolicyFixed, nil
 	case PolicyRandom:
 		return PolicyRandom, nil
-	case PolicyFallback, PolicyFailover:
+	case PolicyFailover:
 		return PolicyFailover, nil
+	case PolicyFallback:
+		if allowFallback {
+			return PolicyFailover, nil
+		}
+		fallthrough
 	default:
-		return "", fmt.Errorf("upstream policy must be fixed, random, or failover")
+		return "", fmt.Errorf("%s policy must be fixed, random, or failover", kind)
 	}
+}
+
+// ParsePolicy maps empty to fixed. Unknown values are an error.
+// The legacy name "fallback" is accepted as failover.
+func ParsePolicy(raw string) (string, error) {
+	return parsePickPolicy(raw, "upstream", true)
 }
 
 // Normalize drops blank URLs and canonicalizes policy and fixed index.
