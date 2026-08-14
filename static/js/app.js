@@ -2,6 +2,7 @@
 function wireAll() {
   wireCore();
   wireChannels();
+  wireProxies();
   wireEPGs();
   wireRelays();
   wireViewer();
@@ -27,7 +28,7 @@ async function boot() {
   }).catch(() => {
     state.baseURL = location.origin;
   });
-  await Promise.all([healthP, loadSettings().catch(() => {}), loadChannels(), loadEPG(), loadRelays()]);
+  await Promise.all([healthP, loadSettings().catch(() => {}), loadChannels(), loadProxies(), loadEPG(), loadRelays()]);
   pollStatus().catch(() => {});
   setInterval(() => { pollStatus().catch(() => {}); }, 5000);
   document.addEventListener("visibilitychange", () => {

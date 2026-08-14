@@ -90,7 +90,7 @@ func TestChannelMultipleUpstreamsCRUD(t *testing.T) {
 	ctx := context.Background()
 	ch, err := st.CreateChannel(ctx, store.ChannelInput{
 		Name:           "News",
-		UpstreamPolicy: store.UpstreamPolicyFallback,
+		UpstreamPolicy: store.UpstreamPolicyFailover,
 		Upstreams: []store.ChannelUpstream{
 			{URL: "http://example.com/a.ts", Headers: map[string]string{"X-Row": "1"}},
 			{URL: "http://example.com/b.ts"},
@@ -103,7 +103,7 @@ func TestChannelMultipleUpstreamsCRUD(t *testing.T) {
 	if ch.UpstreamURL != "http://example.com/a.ts" {
 		t.Fatalf("primary=%q", ch.UpstreamURL)
 	}
-	if ch.UpstreamPolicy != store.UpstreamPolicyFallback || len(ch.Upstreams) != 2 {
+	if ch.UpstreamPolicy != store.UpstreamPolicyFailover || len(ch.Upstreams) != 2 {
 		t.Fatalf("ch=%+v", ch)
 	}
 	if ch.Upstreams[0].Headers["X-Row"] != "1" {
@@ -145,12 +145,32 @@ func TestChannelUniqueUpstreamURLAcrossChannels(t *testing.T) {
 	_, err := st.CreateChannel(ctx, store.ChannelInput{
 		Name: "B",
 		Upstreams: []store.ChannelUpstream{
+			{URL: "http://example.com/a.ts"},
+			{URL: "http://example.com/b.ts"},
+		},
+	})
+	if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "upstream_url already exists") {
+		t.Fatalf("expected url conflict, got %v", err)
+	}
+}
+
+func TestChannelUniqueDirectURLAsNonPrimary(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "A", UpstreamURL: "http://example.com/a.ts",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "B",
+		Upstreams: []store.ChannelUpstream{
 			{URL: "http://example.com/b.ts"},
 			{URL: "http://example.com/a.ts"},
 		},
 	})
 	if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "upstream_url already exists") {
-		t.Fatalf("expected url conflict, got %v", err)
+		t.Fatalf("expected direct url conflict, got %v", err)
 	}
 }
 
@@ -360,8 +380,8 @@ func TestChannelUpdateConflictLeavesChildren(t *testing.T) {
 	_, err = st.UpdateChannel(ctx, a.ID, store.ChannelInput{
 		Name: "A",
 		Upstreams: []store.ChannelUpstream{
-			{URL: "http://example.com/a.ts"},
 			{URL: "http://example.com/b.ts"},
+			{URL: "http://example.com/a.ts"},
 		},
 	})
 	if !errors.Is(err, store.ErrConflict) {
@@ -434,7 +454,7 @@ func TestImportRelayCreatesAndReusesUpstreams(t *testing.T) {
 func TestChannelRelayInvalidateComparesFullList(t *testing.T) {
 	base := store.Channel{
 		UpstreamURL:     "http://example.com/a.ts",
-		UpstreamPolicy:  store.UpstreamPolicyFallback,
+		UpstreamPolicy:  store.UpstreamPolicyFailover,
 		FixedUpstreamID: "u1",
 		Headers:         map[string]string{"A": "1"},
 		Upstreams: []store.ChannelUpstream{

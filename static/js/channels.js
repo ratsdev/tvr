@@ -2,7 +2,7 @@
 const POLICY_HINT = {
   fixed: "Use the selected URL. Reconnect that one.",
   random: "Pick one when a session starts. Stay on it while anyone is watching.",
-  fallback: "Try in order. On failure, continue to the next.",
+  failover: "Try in order. On failure, continue to the next.",
 };
 
 function channelSearchHaystack(ch) {
@@ -187,8 +187,27 @@ function ensureUpstreamRow(u = {}) {
   return {
     id: String(u.id || "").trim() || newUpstreamID(),
     url: u.url || "",
+    proxy_id: String(u.proxy_id || "").trim(),
     headers: u.headers || {},
   };
+}
+
+function proxySelectHTML(selectedId) {
+  const id = String(selectedId || "");
+  const opts = [`<option value="">Direct</option>`];
+  const seen = new Set();
+  for (const p of state.proxies || []) {
+    seen.add(p.id);
+    opts.push(`<option value="${esc(p.id)}" ${p.id === id ? "selected" : ""}>${esc(p.name)}</option>`);
+  }
+  if (id && !seen.has(id)) {
+    opts.push(`<option value="${esc(id)}" selected>${esc(id)}</option>`);
+  }
+  return `<select class="upstream-proxy" data-upstream-proxy>${opts.join("")}</select>`;
+}
+
+function upstreamPlaceholder(proxyId) {
+  return proxyId ? "host:port" : "http(s)://…mpegts or .m3u8";
 }
 
 function persistedUpstreamIDs() {
@@ -213,7 +232,8 @@ function renderChannelUpstreams(rows, { policy = "fixed", fixedId = "", openHead
     return `<div class="upstream-row ${policy === "fixed" ? "" : "fixed-off"}" data-upstream-idx="${i}">
       <div class="upstream-main">
         <input class="upstream-pick" type="radio" name="channel-fixed-up" value="${i}" ${checked ? "checked" : ""} title="Use this URL" />
-        <input type="url" data-upstream-url required placeholder="http(s)://…mpegts or .m3u8" value="${esc(u.url || "")}" />
+        ${proxySelectHTML(u.proxy_id)}
+        <input type="text" data-upstream-url required placeholder="${esc(upstreamPlaceholder(u.proxy_id))}" value="${esc(u.url || "")}" />
         <input type="hidden" data-upstream-id value="${esc(id)}" />
         <div class="upstream-actions">
           <button type="button" class="icon-btn ghost" data-up-move="-1" title="Move up" aria-label="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
@@ -239,6 +259,7 @@ function readUpstreamRows() {
     return {
       id: row.querySelector("[data-upstream-id]")?.value || "",
       url: row.querySelector("[data-upstream-url]")?.value || "",
+      proxy_id: row.querySelector("[data-upstream-proxy]")?.value || "",
       headers,
     };
   });
@@ -273,7 +294,7 @@ function readChannelDraft() {
     logo_url: document.getElementById("channel-logo").value,
     upstream_policy: document.getElementById("channel-policy").value,
     fixed_upstream_id: fixedId,
-    upstreams: rows.map((u) => ({ id: u.id, url: u.url, headers: normalizeOverlay(u.headers) })),
+    upstreams: rows.map((u) => ({ id: u.id, url: u.url, proxy_id: u.proxy_id || "", headers: normalizeOverlay(u.headers) })),
     headers: document.getElementById("channel-headers").value,
     transcode_enabled: document.getElementById("channel-transcode").checked,
   };
@@ -440,6 +461,12 @@ function wireChannels() {
   document.getElementById("btn-add-upstream").addEventListener("click", () => {
     refreshUpstreamList((rows) => { rows.push(ensureUpstreamRow({})); });
   });
+  document.getElementById("channel-upstreams").addEventListener("change", (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLSelectElement) || !t.dataset.upstreamProxy) return;
+    const input = t.closest(".upstream-row")?.querySelector("[data-upstream-url]");
+    if (input) input.placeholder = upstreamPlaceholder(t.value);
+  });
   document.getElementById("channel-upstreams").addEventListener("click", async (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
@@ -498,6 +525,7 @@ function wireChannels() {
       rows.push({
         id: row.querySelector("[data-upstream-id]")?.value || "",
         url: row.querySelector("[data-upstream-url]")?.value.trim() || "",
+        proxy_id: row.querySelector("[data-upstream-proxy]")?.value || "",
         headers: normalizeOverlay(overlay),
       });
     }
@@ -515,6 +543,7 @@ function wireChannels() {
       upstreams: rows.map((u) => {
         const item = { url: u.url, headers: u.headers };
         if (u.id) item.id = u.id;
+        if (u.proxy_id) item.proxy_id = u.proxy_id;
         return item;
       }),
       headers,

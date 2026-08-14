@@ -88,12 +88,31 @@ CREATE TABLE IF NOT EXISTS channels (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proxies (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE,
+  policy TEXT NOT NULL DEFAULT 'fixed',
+  fixed_server_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proxies_name ON proxies(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS proxy_servers (
+  id TEXT PRIMARY KEY,
+  proxy_id TEXT NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_servers_proxy ON proxy_servers(proxy_id, sort_order);
+
 CREATE TABLE IF NOT EXISTS channel_upstreams (
   id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  url TEXT NOT NULL UNIQUE,
+  url TEXT NOT NULL,
   headers_json TEXT NOT NULL DEFAULT '{}',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  proxy_id TEXT REFERENCES proxies(id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_channel_upstreams_channel ON channel_upstreams(channel_id, sort_order);
 
@@ -148,6 +167,15 @@ CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(ch
 	if err := s.ensureChannelUpstreams(); err != nil {
 		return err
 	}
+	if err := s.ensureChannelUpstreamProxy(); err != nil {
+		return err
+	}
+	if err := s.ensureChannelPolicyFailover(); err != nil {
+		return err
+	}
+	if err := s.ensureDirectUpstreamURLUnique(); err != nil {
+		return err
+	}
 	if err := s.ensureBrandSettingsColumns(); err != nil {
 		return err
 	}
@@ -188,15 +216,53 @@ func (s *Store) ensureChannelUpstreams() error {
 CREATE TABLE IF NOT EXISTS channel_upstreams (
   id TEXT PRIMARY KEY,
   channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-  url TEXT NOT NULL UNIQUE,
+  url TEXT NOT NULL,
   headers_json TEXT NOT NULL DEFAULT '{}',
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  proxy_id TEXT REFERENCES proxies(id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_channel_upstreams_channel ON channel_upstreams(channel_id, sort_order);
 `); err != nil {
 		return err
 	}
 	return s.backfillChannelUpstreams()
+}
+
+func (s *Store) ensureChannelPolicyFailover() error {
+	_, err := s.db.Exec(`UPDATE channels SET upstream_policy = 'failover' WHERE lower(upstream_policy) = 'fallback'`)
+	return err
+}
+
+func (s *Store) ensureChannelUpstreamProxy() error {
+	has, err := hasTableColumn(s.db, "channel_upstreams", "proxy_id")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = s.db.Exec(`
+CREATE TABLE channel_upstreams_new (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  headers_json TEXT NOT NULL DEFAULT '{}',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  proxy_id TEXT REFERENCES proxies(id) ON DELETE RESTRICT
+);
+INSERT INTO channel_upstreams_new (id, channel_id, url, headers_json, sort_order, proxy_id)
+SELECT id, channel_id, url, headers_json, sort_order, NULL FROM channel_upstreams;
+DROP TABLE channel_upstreams;
+ALTER TABLE channel_upstreams_new RENAME TO channel_upstreams;
+CREATE INDEX IF NOT EXISTS idx_channel_upstreams_channel ON channel_upstreams(channel_id, sort_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_upstreams_direct_url ON channel_upstreams(url) WHERE proxy_id IS NULL;
+`)
+	return err
+}
+
+func (s *Store) ensureDirectUpstreamURLUnique() error {
+	_, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_upstreams_direct_url ON channel_upstreams(url) WHERE proxy_id IS NULL`)
+	return err
 }
 
 func (s *Store) backfillChannelUpstreams() error {
@@ -462,10 +528,6 @@ func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (
 	if err := validateChannelInput(in); err != nil {
 		return Channel{}, err
 	}
-	spec, err := resolveChannelSpec(in, &existing)
-	if err != nil {
-		return Channel{}, err
-	}
 	headers := in.Headers
 	if headers == nil {
 		headers = existing.Headers
@@ -476,10 +538,14 @@ func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (
 	}
 	transcode := resolveTranscodeEnabled(in.TranscodeEnabled, existing.TranscodeEnabled)
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		spec, err := resolveChannelSpec(ctx, tx, in, &existing)
+		if err != nil {
+			return err
+		}
 		if err := replaceChannelUpstreamsTx(ctx, tx, id, spec); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 UPDATE channels
 SET name = ?, logo_url = ?, upstream_url = ?, headers_json = ?, transcode_enabled = ?,
     upstream_policy = ?, fixed_upstream_id = ?, updated_at = ?
@@ -903,7 +969,7 @@ func channelConflictErr(err error) error {
 	switch {
 	case strings.Contains(msg, "channels.name") || strings.Contains(msg, "idx_channels_name"):
 		return fmt.Errorf("%w: name already exists", ErrConflict)
-	case strings.Contains(msg, "upstream_url") || strings.Contains(msg, "channel_upstreams.url"):
+	case strings.Contains(msg, "upstream_url") || strings.Contains(msg, "channel_upstreams.url") || strings.Contains(msg, "idx_channel_upstreams_direct_url"):
 		return fmt.Errorf("%w: upstream_url already exists", ErrConflict)
 	default:
 		return fmt.Errorf("%w: channel already exists", ErrConflict)

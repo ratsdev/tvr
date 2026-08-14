@@ -32,6 +32,7 @@ type session struct {
 	mu                  sync.Mutex
 	upstream            upstream.Upstream
 	currentIndex        int
+	candidateIndex      int
 	attemptsBeforeReady int
 	readyWatch          *time.Timer
 	viewers             map[int64]*viewer
@@ -92,6 +93,13 @@ func (s *session) applyCurrentUpstreamLocked() {
 		s.currentIndex = 0
 	}
 	up := s.source.Upstreams[idx]
+	cands := up.FetchURLs()
+	if s.candidateIndex < 0 || s.candidateIndex >= len(cands) {
+		s.candidateIndex = 0
+	}
+	if len(cands) > 0 {
+		up.URL = cands[s.candidateIndex]
+	}
 	up.Transcode = s.source.Transcode
 	up.Revision = s.source.Revision
 	s.upstream = up
@@ -102,11 +110,61 @@ func (s *session) applyCurrentUpstreamLocked() {
 func (s *session) advanceIndex() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.advanceLocked()
+}
+
+func (s *session) advanceLocked() {
 	n := len(s.source.Upstreams)
 	if n == 0 {
 		return
 	}
-	s.currentIndex = (s.currentIndex + 1) % n
+	idx := s.currentIndex
+	if idx < 0 || idx >= n {
+		idx = 0
+	}
+	cands := s.source.Upstreams[idx].FetchURLs()
+	if s.candidateIndex+1 < len(cands) {
+		s.candidateIndex++
+		return
+	}
+	s.candidateIndex = 0
+	if s.source.IsFallback() {
+		s.currentIndex = (idx + 1) % n
+	}
+}
+
+func (s *session) shouldWalk() bool {
+	if s.source.IsFallback() {
+		return true
+	}
+	n := len(s.source.Upstreams)
+	if n == 0 {
+		return false
+	}
+	idx := s.currentIndex
+	if idx < 0 || idx >= n {
+		idx = 0
+	}
+	return len(s.source.Upstreams[idx].FetchURLs()) > 1
+}
+
+func (s *session) attemptBudget() int {
+	if s.source.IsFallback() {
+		n := 0
+		for _, u := range s.source.Upstreams {
+			n += max(1, len(u.FetchURLs()))
+		}
+		return n
+	}
+	n := len(s.source.Upstreams)
+	if n == 0 {
+		return 1
+	}
+	idx := s.currentIndex
+	if idx < 0 || idx >= n {
+		idx = 0
+	}
+	return max(1, len(s.source.Upstreams[idx].FetchURLs()))
 }
 
 func (s *session) waitDone(ctx context.Context) error {

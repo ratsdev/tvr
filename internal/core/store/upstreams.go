@@ -24,12 +24,12 @@ type channelSpec struct {
 func normalizeUpstreamPolicy(raw string) (string, error) {
 	p, err := upstream.ParsePolicy(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: upstream_policy must be fixed, random, or fallback", ErrValidation)
+		return "", fmt.Errorf("%w: upstream_policy must be fixed, random, or failover", ErrValidation)
 	}
 	return p, nil
 }
 
-func resolveChannelSpec(in ChannelInput, existing *Channel) (channelSpec, error) {
+func resolveChannelSpec(ctx context.Context, q querier, in ChannelInput, existing *Channel) (channelSpec, error) {
 	policyRaw := strings.TrimSpace(in.UpstreamPolicy)
 	if policyRaw == "" && existing != nil {
 		policyRaw = existing.UpstreamPolicy
@@ -50,19 +50,49 @@ func resolveChannelSpec(in ChannelInput, existing *Channel) (channelSpec, error)
 		return channelSpec{}, fmt.Errorf("%w: at least one upstream is required", ErrValidation)
 	}
 
-	seenURL := map[string]struct{}{}
+	seenKey := map[string]struct{}{}
 	usedID := map[string]struct{}{}
 	out := make([]ChannelUpstream, 0, len(raw))
+	proxyIDs := map[string]struct{}{}
 	for _, u := range raw {
 		item, err := normalizeChannelUpstream(u, usedID)
 		if err != nil {
 			return channelSpec{}, err
 		}
-		if _, dup := seenURL[item.URL]; dup {
+		key := item.URL + "\x00" + item.ProxyID
+		if _, dup := seenKey[key]; dup {
 			return channelSpec{}, fmt.Errorf("%w: duplicate upstream url", ErrValidation)
 		}
-		seenURL[item.URL] = struct{}{}
+		seenKey[key] = struct{}{}
+		if item.ProxyID != "" {
+			proxyIDs[item.ProxyID] = struct{}{}
+		}
 		out = append(out, item)
+	}
+
+	proxies, err := loadProxyMapTx(ctx, q, keys(proxyIDs))
+	if err != nil {
+		return channelSpec{}, err
+	}
+	for i := range out {
+		if out[i].ProxyID == "" {
+			continue
+		}
+		p, ok := proxies[out[i].ProxyID]
+		if !ok {
+			return channelSpec{}, fmt.Errorf("%w: unknown proxy_id", ErrValidation)
+		}
+		out[i].proxy = snapshotProxy(p)
+	}
+
+	seenResolved := map[string]struct{}{}
+	for _, u := range out {
+		for _, ru := range resolvedForDedupe(u) {
+			if _, dup := seenResolved[ru]; dup {
+				return channelSpec{}, fmt.Errorf("%w: duplicate resolved upstream url", ErrValidation)
+			}
+			seenResolved[ru] = struct{}{}
+		}
 	}
 
 	fixedID := strings.TrimSpace(in.FixedUpstreamID)
@@ -72,23 +102,44 @@ func resolveChannelSpec(in ChannelInput, existing *Channel) (channelSpec, error)
 	if _, ok := usedID[fixedID]; !ok {
 		fixedID = out[0].ID
 	}
-	primary := out[0].URL
+	primary := out[0]
 	if policy == UpstreamPolicyFixed {
 		for _, u := range out {
 			if u.ID == fixedID {
-				primary = u.URL
+				primary = u
 				break
 			}
 		}
 	}
-	return channelSpec{upstreams: out, policy: policy, fixedID: fixedID, primaryURL: primary}, nil
+	return channelSpec{upstreams: out, policy: policy, fixedID: fixedID, primaryURL: primary.StablePrimary()}, nil
+}
+
+func keys(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	return out
+}
+
+func resolvedForDedupe(u ChannelUpstream) []string {
+	ref := u.proxyRef()
+	if ref != nil && ref.Policy == upstream.PolicyFailover {
+		return upstream.Resolve(u.URL, ref)
+	}
+	return []string{u.StablePrimary()}
 }
 
 func normalizeChannelUpstream(u ChannelUpstream, usedID map[string]struct{}) (ChannelUpstream, error) {
 	raw := strings.TrimSpace(u.URL)
-	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return ChannelUpstream{}, fmt.Errorf("%w: upstream url must be http(s)", ErrValidation)
+	proxyID := strings.TrimSpace(u.ProxyID)
+	if proxyID == "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return ChannelUpstream{}, fmt.Errorf("%w: upstream url must be http(s)", ErrValidation)
+		}
+	} else if !upstream.ValidProxiedLink(raw) {
+		return ChannelUpstream{}, fmt.Errorf("%w: proxied upstream must be host:port (no scheme)", ErrValidation)
 	}
 	headers := normalizeHeaders(u.Headers)
 	if err := validateHeaderMap(headers); err != nil {
@@ -102,7 +153,7 @@ func normalizeChannelUpstream(u ChannelUpstream, usedID map[string]struct{}) (Ch
 		id = uuid.NewString()
 	}
 	usedID[id] = struct{}{}
-	out := ChannelUpstream{ID: id, URL: raw}
+	out := ChannelUpstream{ID: id, URL: raw, ProxyID: proxyID}
 	if len(headers) > 0 {
 		out.Headers = headers
 	}
@@ -116,9 +167,9 @@ func insertChannelUpstreamsTx(ctx context.Context, q querier, channelID string, 
 			return err
 		}
 		if _, err := q.ExecContext(ctx, `
-INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order)
-VALUES (?, ?, ?, ?, ?)`,
-			u.ID, channelID, u.URL, string(headersJSON), i); err != nil {
+INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order, proxy_id)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			u.ID, channelID, u.URL, string(headersJSON), i, nullIfEmpty(u.ProxyID)); err != nil {
 			return channelConflictErr(err)
 		}
 	}
@@ -158,7 +209,7 @@ FROM channels`)
 	}
 
 	upRows, err := q.QueryContext(ctx, `
-SELECT id, channel_id, url, headers_json, sort_order
+SELECT id, channel_id, url, headers_json, sort_order, proxy_id
 FROM channel_upstreams
 ORDER BY channel_id ASC, sort_order ASC, id ASC`)
 	if err != nil {
@@ -166,14 +217,16 @@ ORDER BY channel_id ASC, sort_order ASC, id ASC`)
 	}
 	defer upRows.Close()
 	byChannel := map[string][]ChannelUpstream{}
+	proxyIDs := map[string]struct{}{}
 	for upRows.Next() {
 		var (
 			item        ChannelUpstream
 			channelID   string
 			headersJSON string
 			sortOrder   int
+			proxyID     sql.NullString
 		)
-		if err := upRows.Scan(&item.ID, &channelID, &item.URL, &headersJSON, &sortOrder); err != nil {
+		if err := upRows.Scan(&item.ID, &channelID, &item.URL, &headersJSON, &sortOrder, &proxyID); err != nil {
 			return err
 		}
 		item.Headers = map[string]string{}
@@ -185,12 +238,22 @@ ORDER BY channel_id ASC, sort_order ASC, id ASC`)
 		if len(item.Headers) == 0 {
 			item.Headers = nil
 		}
+		if proxyID.Valid {
+			item.ProxyID = strings.TrimSpace(proxyID.String)
+			if item.ProxyID != "" {
+				proxyIDs[item.ProxyID] = struct{}{}
+			}
+		}
 		byChannel[channelID] = append(byChannel[channelID], item)
 	}
 	if err := upRows.Err(); err != nil {
 		return err
 	}
 
+	proxies, err := loadProxyMapTx(ctx, q, keys(proxyIDs))
+	if err != nil {
+		return err
+	}
 	for i := range channels {
 		id := channels[i].ID
 		policy := policyByID[id]
@@ -202,6 +265,11 @@ ORDER BY channel_id ASC, sort_order ASC, id ASC`)
 		ups := byChannel[id]
 		if ups == nil {
 			ups = []ChannelUpstream{}
+		}
+		for j := range ups {
+			if p, ok := proxies[ups[j].ProxyID]; ok {
+				ups[j].proxy = snapshotProxy(p)
+			}
 		}
 		channels[i].Upstreams = ups
 		if channels[i].FixedUpstreamID == "" && len(ups) > 0 {
@@ -254,10 +322,16 @@ func (c Channel) StreamSource() upstream.Source {
 	items := make([]upstream.Upstream, 0, len(ups))
 	fixedIdx := 0
 	for i, u := range ups {
+		cands := u.ResolveCandidates()
+		fetch := u.URL
+		if len(cands) > 0 {
+			fetch = cands[0]
+		}
 		items = append(items, upstream.Upstream{
-			ID:      u.ID,
-			URL:     u.URL,
-			Headers: c.MergedHeaders(u),
+			ID:         u.ID,
+			URL:        fetch,
+			Candidates: cands,
+			Headers:    c.MergedHeaders(u),
 		})
 		if c.FixedUpstreamID != "" && u.ID == c.FixedUpstreamID {
 			fixedIdx = i
@@ -335,7 +409,7 @@ func ChannelRelayInvalidate(before, after Channel) bool {
 		return true
 	}
 	for i := range before.Upstreams {
-		if before.Upstreams[i].URL != after.Upstreams[i].URL {
+		if before.Upstreams[i].URL != after.Upstreams[i].URL || before.Upstreams[i].ProxyID != after.Upstreams[i].ProxyID {
 			return true
 		}
 		if !headerMapsEqual(before.Upstreams[i].Headers, after.Upstreams[i].Headers) {
@@ -361,4 +435,44 @@ func headerMapsEqual(a, b map[string]string) bool {
 
 func hasChannelColumn(db *sql.DB, want string) (bool, error) {
 	return hasTableColumn(db, "channels", want)
+}
+
+func (u ChannelUpstream) proxyRef() *upstream.ProxyRef {
+	if u.proxy == nil || u.ProxyID == "" {
+		return nil
+	}
+	return &upstream.ProxyRef{
+		Policy:     u.proxy.Policy,
+		Servers:    u.proxy.Servers,
+		FixedIndex: u.proxy.FixedIndex,
+	}
+}
+
+// StablePrimary is the deterministic fetch URL for this row.
+func (u ChannelUpstream) StablePrimary() string {
+	return upstream.StablePrimary(u.URL, u.proxyRef())
+}
+
+// ResolveCandidates is the session/test fetch URL list for this row.
+func (u ChannelUpstream) ResolveCandidates() []string {
+	return upstream.Resolve(u.URL, u.proxyRef())
+}
+
+func snapshotProxy(p Proxy) *proxySnapshot {
+	servers := make([]string, 0, len(p.Servers))
+	fixedIdx := 0
+	for i, srv := range p.Servers {
+		servers = append(servers, srv.URL)
+		if p.FixedServerID != "" && srv.ID == p.FixedServerID {
+			fixedIdx = i
+		}
+	}
+	return &proxySnapshot{Policy: p.Policy, Servers: servers, FixedIndex: fixedIdx}
+}
+
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }

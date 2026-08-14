@@ -259,11 +259,16 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 			}
 			existing, err := findChannelByNameTx(ctx, tx, name)
 			if err == nil {
-				if err := appendChannelUpstreamTx(ctx, tx, existing.ID, rawURL); err != nil {
+				added, err := appendChannelUpstreamTx(ctx, tx, existing.ID, rawURL)
+				if err != nil {
 					return err
 				}
-				result.UpstreamsAdded++
-				updated[existing.ID] = struct{}{}
+				if added {
+					result.UpstreamsAdded++
+					updated[existing.ID] = struct{}{}
+				} else {
+					result.Reused++
+				}
 				continue
 			}
 			if !errors.Is(err, ErrNotFound) {
@@ -297,38 +302,52 @@ FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
 	return ch, err
 }
 
-func appendChannelUpstreamTx(ctx context.Context, q querier, channelID, rawURL string) error {
+func appendChannelUpstreamTx(ctx context.Context, q querier, channelID, rawURL string) (bool, error) {
 	item, err := normalizeChannelUpstream(ChannelUpstream{URL: rawURL}, map[string]struct{}{})
 	if err != nil {
-		return err
+		return false, err
+	}
+	channels := []Channel{{ID: channelID}}
+	if err := attachChannelUpstreams(ctx, q, channels); err != nil {
+		return false, err
+	}
+	for _, u := range channels[0].Upstreams {
+		for _, ru := range resolvedForDedupe(u) {
+			if ru == item.URL {
+				return false, nil
+			}
+		}
 	}
 	var next int
 	if err := q.QueryRowContext(ctx, `
 SELECT COALESCE(MAX(sort_order)+1, 0) FROM channel_upstreams WHERE channel_id = ?`, channelID).Scan(&next); err != nil {
-		return err
+		return false, err
 	}
 	headersJSON, err := json.Marshal(normalizeHeaders(item.Headers))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := q.ExecContext(ctx, `
-INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order)
-VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order, proxy_id)
+VALUES (?, ?, ?, ?, ?, NULL)`,
 		item.ID, channelID, item.URL, string(headersJSON), next); err != nil {
-		return channelConflictErr(err)
+		return false, channelConflictErr(err)
 	}
 	_, err = q.ExecContext(ctx, `UPDATE channels SET updated_at = ? WHERE id = ?`,
 		time.Now().UTC().Format(time.RFC3339Nano), channelID)
-	return err
+	return true, err
 }
 
 func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {
+	rawURL = strings.TrimSpace(rawURL)
 	row := q.QueryRowContext(ctx, `
 SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
 FROM channels c
 WHERE c.upstream_url = ?
-   OR EXISTS (SELECT 1 FROM channel_upstreams u WHERE u.channel_id = c.id AND u.url = ?)`,
-		strings.TrimSpace(rawURL), strings.TrimSpace(rawURL))
+   OR EXISTS (SELECT 1 FROM channel_upstreams u WHERE u.channel_id = c.id AND u.url = ? AND u.proxy_id IS NULL)
+ORDER BY CASE WHEN c.upstream_url = ? THEN 0 ELSE 1 END, c.id
+LIMIT 1`,
+		rawURL, rawURL, rawURL)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
@@ -340,7 +359,7 @@ func createChannelTx(ctx context.Context, q querier, in ChannelInput) (Channel, 
 	if err := validateChannelInput(in); err != nil {
 		return Channel{}, err
 	}
-	spec, err := resolveChannelSpec(in, nil)
+	spec, err := resolveChannelSpec(ctx, q, in, nil)
 	if err != nil {
 		return Channel{}, err
 	}
@@ -465,4 +484,3 @@ SELECT id, name, url, enabled, refresh_interval_seconds, last_refresh_at, last_e
 FROM epg_sources WHERE id = ?`, id)
 	return scanEPGSource(row)
 }
-

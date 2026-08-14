@@ -156,7 +156,7 @@ func TestRandomSticksThroughIdleWait(t *testing.T) {
 	}
 }
 
-func TestFallbackSkipsDeadFirstWithoutFailingSession(t *testing.T) {
+func TestFailoverSkipsDeadFirstWithoutFailingSession(t *testing.T) {
 	var hitsDead atomic.Int64
 	dead := failStatusServer(t, http.StatusBadGateway, &hitsDead)
 	live := liveMPEGTSServer(t, nil)
@@ -164,7 +164,7 @@ func TestFallbackSkipsDeadFirstWithoutFailingSession(t *testing.T) {
 	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 400 * time.Millisecond})
 	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 	src := upstream.Source{
-		Policy: upstream.PolicyFallback,
+		Policy: upstream.PolicyFailover,
 		Upstreams: []upstream.Upstream{
 			{ID: "dead", URL: dead.URL},
 			{ID: "live", URL: live.URL},
@@ -174,7 +174,7 @@ func TestFallbackSkipsDeadFirstWithoutFailingSession(t *testing.T) {
 	defer cancel()
 	r, err := mgr.Subscribe(ctx, "fb", src)
 	if err != nil {
-		t.Fatalf("fallback should skip dead #1: %v", err)
+		t.Fatalf("failover should skip dead #1: %v", err)
 	}
 	defer r.Close()
 	buf := make([]byte, 188)
@@ -190,13 +190,13 @@ func TestFallbackSkipsDeadFirstWithoutFailingSession(t *testing.T) {
 	}
 }
 
-func TestFallbackExhaustBeforeReadyEndsSession(t *testing.T) {
+func TestFailoverExhaustBeforeReadyEndsSession(t *testing.T) {
 	a := failStatusServer(t, http.StatusBadGateway, nil)
 	b := failStatusServer(t, http.StatusBadGateway, nil)
 	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 300 * time.Millisecond})
 	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 	src := upstream.Source{
-		Policy: upstream.PolicyFallback,
+		Policy: upstream.PolicyFailover,
 		Upstreams: []upstream.Upstream{
 			{ID: "a", URL: a.URL},
 			{ID: "b", URL: b.URL},
@@ -259,7 +259,7 @@ func TestReadyStreamNotKilledByAttemptWatchdog(t *testing.T) {
 	}
 }
 
-func TestFallbackAfterReadyClearsPAT(t *testing.T) {
+func TestFailoverAfterReadyClearsPAT(t *testing.T) {
 	patA := makeTSPacket(0x00, 0x00)
 	patA[1] |= 0x40
 	patA[5] = 0xAA
@@ -294,7 +294,7 @@ func TestFallbackAfterReadyClearsPAT(t *testing.T) {
 	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 3 * time.Second, ConnTimeout: time.Second})
 	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 	src := upstream.Source{
-		Policy: upstream.PolicyFallback,
+		Policy: upstream.PolicyFailover,
 		Upstreams: []upstream.Upstream{
 			{ID: "a", URL: srvA.URL},
 			{ID: "b", URL: srvB.URL},
@@ -336,7 +336,7 @@ func TestFallbackAfterReadyClearsPAT(t *testing.T) {
 	}
 }
 
-func TestFallbackHLSEndlistTriesNext(t *testing.T) {
+func TestFailoverHLSEndlistTriesNext(t *testing.T) {
 	seg := bytesRepeat(makeTSPacket(0x00, 0x00), 8)
 	seg[1] |= 0x40
 	hls := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +361,7 @@ seg.ts
 	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 3 * time.Second, ConnTimeout: 2 * time.Second})
 	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
 	src := upstream.Source{
-		Policy: upstream.PolicyFallback,
+		Policy: upstream.PolicyFailover,
 		Upstreams: []upstream.Upstream{
 			{ID: "hls", URL: hls.URL + "/index.m3u8"},
 			{ID: "live", URL: live.URL},
@@ -412,4 +412,82 @@ func TestFixedIgnoresOtherURLs(t *testing.T) {
 	if hitsLive.Load() != 0 {
 		t.Fatalf("backup was contacted %d times", hitsLive.Load())
 	}
+}
+
+func TestFixedFailoverWalksCandidatesBeforeReady(t *testing.T) {
+	var hits atomic.Int64
+	dead1 := failStatusServer(t, http.StatusBadGateway, &hits)
+	dead2 := failStatusServer(t, http.StatusBadGateway, &hits)
+	live := liveMPEGTSServer(t, nil)
+	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 300 * time.Millisecond})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+	src := upstream.Source{
+		Policy: upstream.PolicyFixed,
+		Upstreams: []upstream.Upstream{{
+			ID:         "p",
+			URL:        dead1.URL,
+			Candidates: []string{dead1.URL, dead2.URL, live.URL},
+		}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r, err := mgr.Subscribe(ctx, "fo", src)
+	if err != nil {
+		t.Fatalf("should walk candidates: %v", err)
+	}
+	defer r.Close()
+	buf := make([]byte, 188)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() < 2 {
+		t.Fatalf("expected both dead servers, hits=%d", hits.Load())
+	}
+}
+
+func TestFixedFailoverExhaustsCandidates(t *testing.T) {
+	a := failStatusServer(t, http.StatusBadGateway, nil)
+	b := failStatusServer(t, http.StatusBadGateway, nil)
+	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 250 * time.Millisecond})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+	src := upstream.Source{
+		Policy: upstream.PolicyFixed,
+		Upstreams: []upstream.Upstream{{
+			ID:         "p",
+			URL:        a.URL,
+			Candidates: []string{a.URL, b.URL},
+		}},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := mgr.Subscribe(ctx, "exfo", src)
+	if err == nil {
+		t.Fatal("expected failReady")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wrapped before ready: %v", err)
+	}
+}
+
+func TestChannelFailoverAfterProxyFailover(t *testing.T) {
+	d1 := failStatusServer(t, http.StatusBadGateway, nil)
+	d2 := failStatusServer(t, http.StatusBadGateway, nil)
+	live := liveMPEGTSServer(t, nil)
+	mgr := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second, ConnTimeout: 300 * time.Millisecond})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+	src := upstream.Source{
+		Policy: upstream.PolicyFailover,
+		Upstreams: []upstream.Upstream{
+			{ID: "a", URL: d1.URL, Candidates: []string{d1.URL, d2.URL}},
+			{ID: "b", URL: live.URL},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r, err := mgr.Subscribe(ctx, "fbfo", src)
+	if err != nil {
+		t.Fatalf("should reach second upstream: %v", err)
+	}
+	defer r.Close()
+	waitUpstreamID(t, mgr, "fbfo", "b", 3*time.Second)
 }

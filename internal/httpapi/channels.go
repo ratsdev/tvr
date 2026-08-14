@@ -136,13 +136,61 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	cands := up.ResolveCandidates()
+	if len(cands) == 0 && strings.TrimSpace(up.URL) != "" {
+		cands = []string{up.URL}
+	}
 	headers := ch.MergedHeaders(up)
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, up.URL, nil)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+
+	var (
+		fetchURL string
+		status   int
+		buf      []byte
+		lastErr  error
+	)
+	for _, cand := range cands {
+		fetchURL = cand
+		status, buf, lastErr = probeFetchURL(ctx, cand, headers)
+		if lastErr != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if status >= 200 && status < 300 && len(buf) > 0 {
+			lastErr = nil
+			break
+		}
+	}
+	if lastErr != nil && status == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": lastErr.Error()})
 		return
+	}
+	ok := lastErr == nil && status >= 200 && status < 300 && len(buf) > 0
+	host := ""
+	if parsed, err := url.Parse(fetchURL); err == nil {
+		host = parsed.Host
+	}
+	n := len(buf)
+	hasSync := n >= mpegts.PacketSize && buf[0] == mpegts.SyncByte
+	looksHLS := n > 7 && strings.Contains(string(buf[:n]), "#EXTM3U")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":            ok,
+		"status_code":   status,
+		"bytes_read":    n,
+		"has_sync":      hasSync,
+		"looks_hls":     looksHLS,
+		"upstream_id":   up.ID,
+		"upstream_host": host,
+	})
+}
+
+func probeFetchURL(ctx context.Context, fetchURL string, headers map[string]string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchURL, nil)
+	if err != nil {
+		return 0, nil, err
 	}
 	req.Header.Set("User-Agent", "tvr/1.0")
 	for k, v := range headers {
@@ -151,24 +199,10 @@ func (s *Server) handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	buf := make([]byte, mpegts.PacketSize*4)
 	n, _ := io.ReadFull(resp.Body, buf)
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 300 && n > 0
-	host := ""
-	if parsed, err := url.Parse(up.URL); err == nil {
-		host = parsed.Host
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":            ok,
-		"status_code":   resp.StatusCode,
-		"bytes_read":    n,
-		"has_sync":      n >= mpegts.PacketSize && buf[0] == mpegts.SyncByte,
-		"looks_hls":     n > 7 && strings.Contains(string(buf[:n]), "#EXTM3U"),
-		"upstream_id":   up.ID,
-		"upstream_host": host,
-	})
+	return resp.StatusCode, buf[:n], nil
 }

@@ -429,6 +429,18 @@ main {
   gap: 6px;
   align-items: center;
 }
+.upstream-main:has(.upstream-proxy) {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+.upstream-proxy {
+  width: 132px;
+  padding: 5px 26px 5px 8px;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+}
 .upstream-main input[type="url"],
 .upstream-main input[type="text"] {
   min-width: 0;

@@ -11,6 +11,8 @@ import (
 const (
 	PolicyFixed    = "fixed"
 	PolicyRandom   = "random"
+	PolicyFailover = "failover"
+	// PolicyFallback is the legacy channel policy name. ParsePolicy maps it to PolicyFailover.
 	PolicyFallback = "fallback"
 )
 
@@ -22,6 +24,8 @@ type Upstream struct {
 	ID      string
 	URL     string
 	Headers map[string]string
+	// Candidates are resolved fetch URLs. Empty means [URL].
+	Candidates []string
 	// Transcode and Revision are copied onto Source by Fixed for test helpers.
 	Transcode bool
 	Revision  string
@@ -53,10 +57,10 @@ func ParsePolicy(raw string) (string, error) {
 		return PolicyFixed, nil
 	case PolicyRandom:
 		return PolicyRandom, nil
-	case PolicyFallback:
-		return PolicyFallback, nil
+	case PolicyFallback, PolicyFailover:
+		return PolicyFailover, nil
 	default:
-		return "", fmt.Errorf("upstream policy must be fixed, random, or fallback")
+		return "", fmt.Errorf("upstream policy must be fixed, random, or failover")
 	}
 }
 
@@ -87,26 +91,41 @@ func Normalize(src Source) (Source, error) {
 	return src, nil
 }
 
-// StartIndex is the first URL to try for a new session.
-func (s Source) StartIndex() int {
-	n := len(s.Upstreams)
-	if n == 0 {
+// PickIndex chooses a start index for Fixed / Random / first.
+func PickIndex(policy string, n, fixed int) int {
+	if n <= 0 {
 		return 0
 	}
-	switch s.Policy {
+	switch policy {
 	case PolicyRandom:
 		return rand.IntN(n)
 	case PolicyFixed:
-		if s.FixedIndex >= 0 && s.FixedIndex < n {
-			return s.FixedIndex
+		if fixed >= 0 && fixed < n {
+			return fixed
 		}
 	}
 	return 0
 }
 
+// StartIndex is the first URL to try for a new session.
+func (s Source) StartIndex() int {
+	return PickIndex(s.Policy, len(s.Upstreams), s.FixedIndex)
+}
+
+// FetchURLs returns Candidates, or [URL] when Candidates is empty.
+func (u Upstream) FetchURLs() []string {
+	if len(u.Candidates) > 0 {
+		return u.Candidates
+	}
+	if strings.TrimSpace(u.URL) != "" {
+		return []string{u.URL}
+	}
+	return nil
+}
+
 // IsFallback reports whether a dead pump should walk to the next URL.
 func (s Source) IsFallback() bool {
-	return s.Policy == PolicyFallback
+	return s.Policy == PolicyFailover || s.Policy == PolicyFallback
 }
 
 // Host is the URL host (host:port), never userinfo or query.

@@ -9,14 +9,51 @@ import (
 const (
 	UpstreamPolicyFixed    = upstream.PolicyFixed
 	UpstreamPolicyRandom   = upstream.PolicyRandom
-	UpstreamPolicyFallback = upstream.PolicyFallback
+	UpstreamPolicyFailover = upstream.PolicyFailover
+	ProxyPolicyFixed       = upstream.PolicyFixed
+	ProxyPolicyRandom      = upstream.PolicyRandom
+	ProxyPolicyFailover    = upstream.PolicyFailover
 )
 
-// ChannelUpstream is one HTTP(S) source URL on a channel.
+// ChannelUpstream is one source URL on a channel.
 type ChannelUpstream struct {
 	ID      string            `json:"id"`
 	URL     string            `json:"url"`
+	ProxyID string            `json:"proxy_id,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	proxy   *proxySnapshot    `json:"-"`
+}
+
+type proxySnapshot struct {
+	Policy     string
+	Servers    []string
+	FixedIndex int
+}
+
+// ProxyServer is one HTTP prefix on a proxy.
+type ProxyServer struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// Proxy is a named list of HTTP prefixes and a pick policy.
+type Proxy struct {
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Policy        string        `json:"policy"`
+	FixedServerID string        `json:"fixed_server_id,omitempty"`
+	Servers       []ProxyServer `json:"servers"`
+	ChannelCount  int           `json:"channel_count"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+}
+
+// ProxyInput is the writable subset used by create/update APIs.
+type ProxyInput struct {
+	Name          string        `json:"name"`
+	Policy        string        `json:"policy"`
+	FixedServerID string        `json:"fixed_server_id"`
+	Servers       []ProxyServer `json:"servers"`
 }
 
 // Channel is a reusable global IPTV upstream definition.

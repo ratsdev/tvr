@@ -19,6 +19,7 @@
         <div class="nav-group">
           <div class="nav-label">Library</div>
           <button type="button" class="nav-item active" data-tab="channels">Channels</button>
+          <button type="button" class="nav-item" data-tab="proxies">Proxies</button>
           <button type="button" class="nav-item" data-tab="epgs">EPG Sources</button>
         </div>
         <div class="nav-group">
@@ -109,7 +110,7 @@
                     <select id="channel-policy">
                       <option value="fixed">Fixed</option>
                       <option value="random">Random</option>
-                      <option value="fallback">Fallback</option>
+                      <option value="failover">Failover</option>
                     </select>
                   </label>
                   <p class="muted field-hint" id="channel-policy-hint"></p>
@@ -127,6 +128,69 @@
                   <label>Headers (JSON)<textarea id="channel-headers" rows="3" placeholder='{"User-Agent":"…"}'></textarea></label>
                   <p class="muted" id="channel-meta"></p>
                   <p id="channel-error" class="error"></p>
+                </form>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- Proxies: master-detail -->
+        <section id="tab-proxies" class="tab-panel">
+          <div class="md">
+            <aside class="master">
+              <div class="master-head">
+                <div class="master-title-row">
+                  <strong id="proxy-count">Proxies</strong>
+                  <div class="row">
+                    <button type="button" class="primary" id="btn-new-proxy">Add</button>
+                  </div>
+                </div>
+                <input id="proxy-search" type="search" placeholder="Search Proxies…" />
+                <div class="bulk-bar hidden" id="proxy-bulk">
+                  <span class="bulk-count" id="proxy-bulk-count">0 selected</span>
+                  <button type="button" class="ghost" id="btn-proxy-select-all">All</button>
+                  <button type="button" class="ghost" id="btn-clear-proxies">Clear</button>
+                  <button type="button" class="danger" id="btn-del-proxies">Delete</button>
+                </div>
+              </div>
+              <div class="master-list" id="proxy-list"></div>
+            </aside>
+            <section class="detail" id="proxy-detail">
+              <div class="detail-empty" id="proxy-detail-empty">
+                <p>Select a Proxy</p>
+                <span class="muted">Or add one to the library</span>
+              </div>
+              <div class="detail-body hidden" id="proxy-detail-body">
+                <div class="detail-head">
+                  <div class="detail-title-wrap">
+                    <button type="button" class="ghost back-btn" data-back="proxies">← List</button>
+                    <h2 id="proxy-detail-title">Proxy</h2>
+                  </div>
+                  <div class="row detail-actions">
+                    <button type="submit" class="primary" id="proxy-save" form="proxy-form">Save</button>
+                    <button type="button" class="danger" id="btn-del-proxy">Delete</button>
+                  </div>
+                </div>
+                <form id="proxy-form" class="detail-form">
+                  <input type="hidden" id="proxy-id" />
+                  <label>Name<input id="proxy-name" required /></label>
+                  <label>Policy
+                    <select id="proxy-policy">
+                      <option value="fixed">Fixed</option>
+                      <option value="random">Random</option>
+                      <option value="failover">Failover</option>
+                    </select>
+                  </label>
+                  <p class="muted field-hint" id="proxy-policy-hint"></p>
+                  <div class="upstream-block">
+                    <div class="upstream-head">
+                      <span class="section-title">Servers</span>
+                      <button type="button" id="btn-add-proxy-server">Add</button>
+                    </div>
+                    <div id="proxy-servers" class="upstream-list"></div>
+                  </div>
+                  <p class="muted" id="proxy-meta"></p>
+                  <p id="proxy-error" class="error"></p>
                 </form>
               </div>
             </section>
@@ -484,6 +548,7 @@
   <script src="/assets/js/state.js"></script>
   <script src="/assets/js/core.js"></script>
   <script src="/assets/js/channels.js"></script>
+  <script src="/assets/js/proxies.js"></script>
   <script src="/assets/js/epgs.js"></script>
   <script src="/assets/js/relays.js"></script>
   <script src="/assets/js/viewer.js"></script>

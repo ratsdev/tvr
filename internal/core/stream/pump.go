@@ -74,35 +74,25 @@ func (s *session) run() {
 }
 
 func (s *session) handlePumpError(err error, backoff *time.Duration) (stop bool) {
-	if s.source.IsFallback() {
-		if !s.everReady.Load() {
+	walk := s.shouldWalk()
+	if !s.everReady.Load() {
+		if walk {
 			s.attemptsBeforeReady++
-			if s.attemptsBeforeReady >= len(s.source.Upstreams) {
+			if s.attemptsBeforeReady >= s.attemptBudget() {
 				s.failReady(fmt.Errorf("%w: %w", ErrUpstreamFailed, err))
 				return true
 			}
 			s.advanceIndex()
 			return false
 		}
-		s.advanceIndex()
-		s.setState("error", err.Error())
-		s.opts.Logger.Warn("stream upstream error", "channel_id", s.channelID, "err", err)
-		select {
-		case <-s.stopCh:
-			return true
-		case <-time.After(*backoff):
-		}
-		if *backoff < 15*time.Second {
-			*backoff *= 2
-		}
-		return false
-	}
-	if errors.Is(err, errStreamEnded) {
-		return true
-	}
-	if !s.everReady.Load() {
 		s.failReady(fmt.Errorf("%w: %w", ErrUpstreamFailed, err))
 		return true
+	}
+	if errors.Is(err, errStreamEnded) && !walk {
+		return true
+	}
+	if walk {
+		s.advanceIndex()
 	}
 	s.setState("error", err.Error())
 	s.opts.Logger.Warn("stream upstream error", "channel_id", s.channelID, "err", err)

@@ -122,6 +122,48 @@ VALUES ('c1', 'News', '', 'http://example.com/a.ts', '{}', 't', 't');
 	}
 }
 
+func TestOpenMigratesChannelPolicyFallbackToFailover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fallback.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := st.CreateChannel(context.Background(), store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts", UpstreamPolicy: store.UpstreamPolicyFailover,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE channels SET upstream_policy = 'fallback' WHERE id = ?`, ch.ID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err = store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	got, err := st.GetChannel(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UpstreamPolicy != store.UpstreamPolicyFailover {
+		t.Fatalf("policy=%q", got.UpstreamPolicy)
+	}
+}
+
 func TestRelaySlugUnique(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()

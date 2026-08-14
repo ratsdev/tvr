@@ -2,22 +2,26 @@
 const state = {
   channels: [],
   epgs: [],
+  proxies: [],
   relays: [],
   channelStatuses: [],
   baseURL: "",
   currentRelay: null,
   selectedChannelId: null,
   selectedEPGId: null,
+  selectedProxyId: null,
   selectedRelayId: null,
   creatingChannel: false,
   creatingEPG: false,
+  creatingProxy: false,
   dragMemberId: null,
   dragGroupId: null,
   collapsedGroups: new Set(),
-  filter: { channels: "", epgs: "", relays: "" },
+  filter: { channels: "", epgs: "", proxies: "", relays: "" },
   selected: {
     channels: new Set(),
     epgs: new Set(),
+    proxies: new Set(),
     relays: new Set(),
     members: new Set(),
   },
@@ -26,6 +30,7 @@ const state = {
   gens: {
     channels: 0,
     epgs: 0,
+    proxies: 0,
     relays: 0,
     relayOpen: 0,
     relayLineup: 0,
@@ -35,6 +40,7 @@ const state = {
   editors: {
     channel: { baseline: null },
     epg: { baseline: null },
+    proxy: { baseline: null },
     relayMeta: { baseline: null },
   },
   viewer: {
@@ -203,6 +209,7 @@ async function refreshRelayLineup() {
 
 const PAGE_META = {
   channels: { title: "Channels", desc: "Manage stream sources" },
+  proxies: { title: "Proxies", desc: "HTTP prefixes for multicast links" },
   epgs: { title: "EPG Sources", desc: "Configure EPG feeds" },
   relays: { title: "Relays", desc: "Publish playlists and EPG feeds" },
   "epg-viewer": { title: "EPG Viewer", desc: "Review EPG data" },
@@ -470,6 +477,12 @@ function wireCore() {
         state.editors.channel.baseline = null;
         renderChannelList();
         showChannelDetail({ forceFill: true });
+      } else if (tab === "proxies") {
+        state.creatingProxy = false;
+        state.selectedProxyId = null;
+        state.editors.proxy.baseline = null;
+        renderProxyList();
+        showProxyDetail({ forceFill: true });
       } else if (tab === "epgs") {
         state.creatingEPG = false;
         state.selectedEPGId = null;

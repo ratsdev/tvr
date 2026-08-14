@@ -93,6 +93,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/channels/{id}", s.handleDeleteChannel)
 	s.mux.HandleFunc("POST /api/channels/{id}/test", s.handleTestChannel)
 
+	s.mux.HandleFunc("GET /api/proxies", s.handleListProxies)
+	s.mux.HandleFunc("POST /api/proxies", s.handleCreateProxy)
+	s.mux.HandleFunc("GET /api/proxies/{id}", s.handleGetProxy)
+	s.mux.HandleFunc("PUT /api/proxies/{id}", s.handleUpdateProxy)
+	s.mux.HandleFunc("DELETE /api/proxies/{id}", s.handleDeleteProxy)
+
 	s.mux.HandleFunc("GET /api/epg/sources", s.handleListEPGSources)
 	s.mux.HandleFunc("POST /api/epg/sources", s.handleCreateEPGSource)
 	s.mux.HandleFunc("PUT /api/epg/sources/{id}", s.handleUpdateEPGSource)

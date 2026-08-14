@@ -48,4 +48,12 @@ func TestParsePolicy(t *testing.T) {
 	if _, err := ParsePolicy("round-robin"); err == nil {
 		t.Fatal("expected error")
 	}
+	p, err = ParsePolicy("fallback")
+	if err != nil || p != PolicyFailover {
+		t.Fatalf("legacy fallback: got %q err=%v", p, err)
+	}
+	p, err = ParsePolicy("failover")
+	if err != nil || p != PolicyFailover {
+		t.Fatalf("got %q err=%v", p, err)
+	}
 }

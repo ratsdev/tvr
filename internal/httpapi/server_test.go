@@ -1373,7 +1373,7 @@ func TestChannelPutOverlayInvalidatesSession(t *testing.T) {
 	ctx := context.Background()
 	ch, err := st.CreateChannel(ctx, store.ChannelInput{
 		Name:           "Live",
-		UpstreamPolicy: store.UpstreamPolicyFallback,
+		UpstreamPolicy: store.UpstreamPolicyFailover,
 		Upstreams: []store.ChannelUpstream{
 			{URL: up.URL + "/a.ts"},
 			{URL: backup.URL + "/b.ts"},
@@ -1399,7 +1399,7 @@ func TestChannelPutOverlayInvalidatesSession(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"name":              "Live",
 		"logo_url":          "",
-		"upstream_policy":   store.UpstreamPolicyFallback,
+		"upstream_policy":   store.UpstreamPolicyFailover,
 		"fixed_upstream_id": ch.FixedUpstreamID,
 		"upstreams": []map[string]any{
 			{"id": ch.Upstreams[0].ID, "url": ch.Upstreams[0].URL, "headers": map[string]string{}},
