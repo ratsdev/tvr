@@ -64,7 +64,7 @@ function isEPGDirty() {
 }
 
 function fillEPGForm(src) {
-  document.getElementById("epg-detail-title").textContent = state.creatingEPG ? "New EPG source" : src.name;
+  document.getElementById("epg-detail-title").textContent = state.creatingEPG ? "New EPG Source" : src.name;
   document.getElementById("epg-id").value = src?.id || "";
   document.getElementById("epg-name").value = src?.name || "";
   document.getElementById("epg-url").value = src?.url || "";

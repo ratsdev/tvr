@@ -28,6 +28,7 @@ const state = {
     relays: 0,
     relayOpen: 0,
     relayLineup: 0,
+    memberRelay: 0,
     tvg: 0,
   },
   editors: {

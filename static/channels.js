@@ -284,7 +284,7 @@ function isChannelDirty() {
 }
 
 function fillChannelForm(ch) {
-  document.getElementById("channel-detail-title").textContent = state.creatingChannel ? "New channel" : ch.name;
+  document.getElementById("channel-detail-title").textContent = state.creatingChannel ? "New Channel" : ch.name;
   document.getElementById("channel-id").value = ch?.id || "";
   document.getElementById("channel-name").value = ch?.name || "";
   document.getElementById("channel-logo").value = ch?.logo_url || "";
@@ -312,6 +312,7 @@ function updateChannelMeta(ch) {
   }
   const creating = state.creatingChannel;
   document.getElementById("btn-test-channel").classList.toggle("hidden", creating);
+  document.getElementById("btn-add-channel-to-relay").classList.toggle("hidden", creating);
   document.getElementById("btn-del-channel").classList.toggle("hidden", creating);
   const linkRow = document.getElementById("channel-link-row");
   const copyBtn = document.getElementById("btn-copy-channel-stream");
@@ -536,6 +537,10 @@ function wireChannels() {
       applyChannelDeletes([id]);
       toast.success("Channel deleted");
     } catch (err) { toast.error("Delete failed", err.message); }
+  });
+  document.getElementById("btn-add-channel-to-relay").addEventListener("click", async () => {
+    if (!state.selectedChannelId) return;
+    await openMemberDialog(null, state.selectedChannelId);
   });
   document.getElementById("btn-test-channel").addEventListener("click", async () => {
     const id = state.selectedChannelId;

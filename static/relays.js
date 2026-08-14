@@ -227,22 +227,67 @@ async function dropGroup(dragId, beforeId) {
   })));
 }
 
-async function openMemberDialog(member) {
-  const channelSel = document.getElementById("member-channel");
+const MEMBER_NEW_GROUP = "__new__";
+
+function showNewGroupField(on) {
+  document.getElementById("member-new-group-wrap").classList.toggle("hidden", !on);
+  if (!on) document.getElementById("member-new-group").value = "";
+}
+
+async function loadMemberTargets(relayId, member) {
+  const gen = ++state.gens.memberRelay;
+  const detail = state.currentRelay?.id === relayId ? state.currentRelay : await api(`/api/relays/${relayId}`);
+  if (!isCurrentGeneration(gen, state.gens.memberRelay)) return false;
   const groupSel = document.getElementById("member-group");
   const epgSel = document.getElementById("member-epg-source");
-  channelSel.innerHTML = state.channels
-    .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-  groupSel.innerHTML = state.currentRelay.groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("");
-  const selectedEPGs = state.epgs.filter((e) => (state.currentRelay.epg_source_ids || []).includes(e.id));
-  epgSel.innerHTML = `<option value="">(none)</option>` + selectedEPGs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
-  document.getElementById("member-dialog-title").textContent = member ? "Edit membership" : "Add channel";
+  const groups = detail.groups || [];
+  groupSel.innerHTML = groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")
+    + `<option value="${MEMBER_NEW_GROUP}">(Create New Group)</option>`;
+  const epgs = state.epgs.filter((e) => (detail.epg_source_ids || []).includes(e.id));
+  epgSel.innerHTML = `<option value="">(none)</option>` + epgs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
+  groupSel.value = member?.group_id ?? groups[0]?.id ?? MEMBER_NEW_GROUP;
+  epgSel.value = member?.epg_source_id ?? "";
+  showNewGroupField(groupSel.value === MEMBER_NEW_GROUP);
+  return true;
+}
+
+async function openMemberDialog(member, channelId) {
+  const relayWrap = document.getElementById("member-relay-wrap");
+  const relaySel = document.getElementById("member-relay");
+  const channelWrap = document.getElementById("member-channel-wrap");
+  const channelSel = document.getElementById("member-channel");
+
+  if (channelId) {
+    const ch = state.channels.find((c) => c.id === channelId);
+    if (!ch) return;
+    const relays = state.relays.filter((r) => !(ch.relay_slugs || []).includes(r.slug));
+    if (!state.relays.length) { toast.info("Create a relay first"); return; }
+    if (!relays.length) { toast.info("Already in every relay"); return; }
+    relayWrap.classList.remove("hidden");
+    channelWrap.classList.add("hidden");
+    relaySel.innerHTML = relays.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
+    channelSel.innerHTML = `<option value="${ch.id}">${esc(ch.name)}</option>`;
+    document.getElementById("member-dialog-title").textContent = "Add to Relay";
+  } else if (!state.currentRelay) {
+    return;
+  } else {
+    relayWrap.classList.add("hidden");
+    channelWrap.classList.remove("hidden");
+    relaySel.innerHTML = `<option value="${state.currentRelay.id}">${esc(state.currentRelay.name)}</option>`;
+    channelSel.innerHTML = state.channels.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    document.getElementById("member-dialog-title").textContent = member ? "Edit membership" : "Add Channel";
+  }
+
   document.getElementById("member-id").value = member?.id || "";
-  document.getElementById("member-channel").value = member?.channel_id || (state.channels[0]?.id || "");
-  document.getElementById("member-group").value = member?.group_id || (state.currentRelay.groups[0]?.id || "");
-  document.getElementById("member-epg-source").value = member?.epg_source_id || "";
+  document.getElementById("member-channel").value = channelId || member?.channel_id || state.channels[0]?.id || "";
   document.getElementById("member-tvg-id").value = member?.tvg_id || "";
   document.getElementById("member-error").textContent = "";
+  try {
+    if (!await loadMemberTargets(Number(relaySel.value), member)) return;
+  } catch (err) {
+    toast.error("Failed to load relay", err.message);
+    return;
+  }
   document.getElementById("member-dialog").showModal();
   await refreshTvgSuggestions();
 }
@@ -386,7 +431,6 @@ function wireRelays() {
   });
   document.getElementById("btn-add-member").addEventListener("click", async () => {
     if (!state.channels.length) { toast.info("Add channels first"); return; }
-    if (!state.currentRelay.groups.length) { toast.info("Add a group first"); return; }
     await openMemberDialog(null);
   });
   document.getElementById("btn-clear-members").addEventListener("click", () => {
@@ -404,6 +448,25 @@ function wireRelays() {
     await loadChannels();
   });
   document.getElementById("member-cancel").addEventListener("click", () => document.getElementById("member-dialog").close());
+  document.querySelector("#member-dialog form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    document.getElementById("member-save").click();
+  });
+  document.getElementById("member-relay").addEventListener("change", async () => {
+    document.getElementById("member-tvg-id").value = "";
+    document.getElementById("member-error").textContent = "";
+    try {
+      if (!await loadMemberTargets(Number(document.getElementById("member-relay").value), null)) return;
+      await refreshTvgSuggestions();
+    } catch (err) {
+      document.getElementById("member-error").textContent = err.message;
+    }
+  });
+  document.getElementById("member-group").addEventListener("change", () => {
+    const creating = document.getElementById("member-group").value === MEMBER_NEW_GROUP;
+    showNewGroupField(creating);
+    if (creating) document.getElementById("member-new-group").focus();
+  });
   document.getElementById("member-tvg-id").addEventListener("input", () => {
     clearTimeout(window.__tvgTimer);
     window.__tvgTimer = setTimeout(refreshTvgSuggestions, 200);
@@ -411,23 +474,43 @@ function wireRelays() {
   document.getElementById("member-save").addEventListener("click", async (e) => {
     e.preventDefault();
     const errEl = document.getElementById("member-error");
+    const saveBtn = document.getElementById("member-save");
     errEl.textContent = "";
+    const relayId = Number(document.getElementById("member-relay").value);
+    if (!relayId) { errEl.textContent = "Select a relay"; return; }
     const epgRaw = document.getElementById("member-epg-source").value;
-    const body = {
-      channel_id: document.getElementById("member-channel").value,
-      group_id: Number(document.getElementById("member-group").value),
-      epg_source_id: epgRaw ? Number(epgRaw) : null,
-      tvg_id: document.getElementById("member-tvg-id").value,
-    };
+    const channelId = document.getElementById("member-channel").value;
+    if (!channelId) { errEl.textContent = "Select a channel"; return; }
     const id = document.getElementById("member-id").value;
+    const relayName = document.getElementById("member-relay").selectedOptions[0]?.textContent || "";
+    const groupRaw = document.getElementById("member-group").value;
+    const newGroupName = document.getElementById("member-new-group").value.trim();
+    if (groupRaw === MEMBER_NEW_GROUP && !newGroupName) { errEl.textContent = "Enter a group name"; return; }
+    saveBtn.disabled = true;
     try {
-      if (id) await api(`/api/relays/${state.currentRelay.id}/memberships/${id}`, { method: "PUT", body: JSON.stringify(body) });
-      else await api(`/api/relays/${state.currentRelay.id}/memberships`, { method: "POST", body: JSON.stringify(body) });
+      let groupId = Number(groupRaw);
+      if (groupRaw === MEMBER_NEW_GROUP) {
+        const g = await api(`/api/relays/${relayId}/groups`, { method: "POST", body: JSON.stringify({ name: newGroupName }) });
+        groupId = g.id;
+        const sel = document.getElementById("member-group");
+        sel.insertBefore(new Option(g.name, g.id), sel.lastElementChild);
+        sel.value = String(g.id);
+        showNewGroupField(false);
+      }
+      const body = {
+        channel_id: channelId,
+        group_id: groupId,
+        epg_source_id: epgRaw ? Number(epgRaw) : null,
+        tvg_id: document.getElementById("member-tvg-id").value,
+      };
+      if (id) await api(`/api/relays/${relayId}/memberships/${id}`, { method: "PUT", body: JSON.stringify(body) });
+      else await api(`/api/relays/${relayId}/memberships`, { method: "POST", body: JSON.stringify(body) });
       document.getElementById("member-dialog").close();
-      await refreshRelayLineup();
+      if (state.currentRelay?.id === relayId) await refreshRelayLineup();
       await loadChannels();
-      toast.success(id ? "Membership updated" : "Channel added to relay");
+      toast.success(id ? "Membership updated" : "Channel added to Relay", id ? "" : relayName);
     } catch (err) { errEl.textContent = err.message; toast.error("Save failed", err.message); }
+    finally { saveBtn.disabled = false; }
   });
   document.getElementById("relay-lineup").addEventListener("change", (e) => {
     const t = e.target;

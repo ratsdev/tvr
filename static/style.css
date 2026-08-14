@@ -725,7 +725,6 @@ textarea { resize: vertical; min-height: 64px; }
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
-  flex-shrink: 0;
 }
 .toast.success .toast-title { color: var(--ok); }
 .toast.error .toast-title { color: var(--danger); }

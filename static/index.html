@@ -92,6 +92,7 @@
                   </div>
                   <div class="row detail-actions">
                     <button type="button" id="btn-test-channel">Test</button>
+                    <button type="button" id="btn-add-channel-to-relay">Add to Relay</button>
                     <button type="submit" class="primary" id="channel-save" form="channel-form">Save</button>
                     <button type="button" class="danger" id="btn-del-channel">Delete</button>
                   </div>
@@ -250,8 +251,8 @@
                     <button type="button" class="ghost" id="btn-clear-members">Clear</button>
                   </div>
                   <div class="row">
-                    <button type="button" id="btn-add-group">Add group</button>
-                    <button type="button" class="primary" id="btn-add-member">Add channel</button>
+                    <button type="button" id="btn-add-group">Add Group</button>
+                    <button type="button" class="primary" id="btn-add-member">Add Channel</button>
                   </div>
                 </div>
                 <div id="relay-lineup" class="lineup"></div>
@@ -347,7 +348,7 @@
 
   <dialog id="relay-dialog">
     <form method="dialog">
-      <h3>New relay</h3>
+      <h3>New Relay</h3>
       <label>Name<input id="new-relay-name" required /></label>
       <label>Slug<input id="new-relay-slug" placeholder="optional" /></label>
       <div class="actions">
@@ -362,11 +363,17 @@
     <form method="dialog">
       <h3 id="member-dialog-title">Relay channel</h3>
       <input type="hidden" id="member-id" />
-      <label>Channel
+      <label id="member-relay-wrap" class="hidden">Relay
+        <select id="member-relay"></select>
+      </label>
+      <label id="member-channel-wrap">Channel
         <select id="member-channel"></select>
       </label>
       <label>Group
         <select id="member-group"></select>
+      </label>
+      <label id="member-new-group-wrap" class="hidden">New group name
+        <input id="member-new-group" placeholder="e.g. Sports" />
       </label>
       <label>EPG source
         <select id="member-epg-source"><option value="">(none)</option></select>
