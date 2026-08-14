@@ -316,13 +316,13 @@
                       <div class="settings-brand-icon-fields">
                         <input id="settings-brand-icon" type="text" placeholder="Image URL (optional)" />
                         <div class="settings-brand-icon-tools">
-                          <input type="file" id="settings-brand-icon-file" class="hidden" accept="image/*" />
                           <button type="button" id="settings-brand-icon-pick">Upload</button>
                           <button type="button" class="ghost" id="settings-brand-icon-reset">Use default</button>
                         </div>
                       </div>
                     </div>
                   </label>
+                  <input type="file" id="settings-brand-icon-file" class="hidden" accept="image/*" />
                 </div>
                 <p id="settings-brand-error" class="error"></p>
               </div>
@@ -439,7 +439,13 @@
   <dialog id="import-channels-dialog">
     <form method="dialog">
       <h3>Import Channels</h3>
-      <label>Upload file<input id="import-channels-file" type="file" accept=".txt,text/plain" /></label>
+      <label>File
+        <div class="file-pick">
+          <button type="button" id="import-channels-pick">Choose file</button>
+          <span class="file-pick-name muted" id="import-channels-filename">No file selected</span>
+        </div>
+      </label>
+      <input type="file" id="import-channels-file" class="hidden" accept=".txt,text/plain" />
       <label>Or paste<textarea id="import-channels-content" rows="6" placeholder="CHANNEL_NAME,http://…"></textarea></label>
       <div class="actions">
         <button type="button" id="import-channels-cancel">Cancel</button>
@@ -455,7 +461,13 @@
       <label>Relay name<input id="import-relay-name" placeholder="Imported Relay" /></label>
       <label>Relay slug<input id="import-relay-slug" placeholder="optional" /></label>
       <label>M3U URL<input id="import-url" placeholder="https://example.com/playlist.m3u" /></label>
-      <label>Or upload file<input id="import-file" type="file" accept=".m3u,.m3u8,text/plain" /></label>
+      <label>Or file
+        <div class="file-pick">
+          <button type="button" id="import-file-pick">Choose file</button>
+          <span class="file-pick-name muted" id="import-filename">No file selected</span>
+        </div>
+      </label>
+      <input type="file" id="import-file" class="hidden" accept=".m3u,.m3u8,text/plain" />
       <label>Or paste<textarea id="import-content" rows="6"></textarea></label>
       <label class="checkbox"><input id="import-ignore-groups" type="checkbox" /> Ignore original Groups</label>
       <label class="checkbox"><input id="import-epg" type="checkbox" checked /> Import url-tvg as EPG Sources</label>

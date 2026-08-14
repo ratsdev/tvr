@@ -129,17 +129,13 @@ function wireSettings() {
     settingsBrandError().textContent = "";
     preview();
   });
-  document.getElementById("settings-brand-icon-pick").addEventListener("click", () => fileEl.click());
   document.getElementById("settings-brand-icon-reset").addEventListener("click", () => {
     pendingBrandUpload = "";
     iconEl.value = "";
     settingsBrandError().textContent = "";
     preview();
   });
-  fileEl.addEventListener("change", async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
+  onFilePick(document.getElementById("settings-brand-icon-pick"), fileEl, async (file) => {
     if (file.type && !file.type.startsWith("image/")) {
       settingsBrandError().textContent = "Icon must be an image";
       return;

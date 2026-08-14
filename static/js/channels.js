@@ -599,17 +599,30 @@ function wireChannels() {
   document.getElementById("btn-import-channels").addEventListener("click", () => {
     document.getElementById("import-channels-content").value = "";
     document.getElementById("import-channels-file").value = "";
+    document.getElementById("import-channels-filename").textContent = "No file selected";
     document.getElementById("import-channels-error").textContent = "";
     document.getElementById("import-channels-dialog").showModal();
   });
   document.getElementById("import-channels-cancel").addEventListener("click", () => {
     document.getElementById("import-channels-dialog").close();
   });
-  document.getElementById("import-channels-file").addEventListener("change", async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    document.getElementById("import-channels-content").value = await file.text();
-  });
+  onFilePick(
+    document.getElementById("import-channels-pick"),
+    document.getElementById("import-channels-file"),
+    async (file) => {
+      const nameEl = document.getElementById("import-channels-filename");
+      const errEl = document.getElementById("import-channels-error");
+      try {
+        const text = await file.text();
+        nameEl.textContent = file.name;
+        document.getElementById("import-channels-content").value = text;
+        errEl.textContent = "";
+      } catch (err) {
+        nameEl.textContent = "No file selected";
+        errEl.textContent = err.message || "failed to read file";
+      }
+    },
+  );
   document.getElementById("import-channels-save").addEventListener("click", async (e) => {
     e.preventDefault();
     const errEl = document.getElementById("import-channels-error");

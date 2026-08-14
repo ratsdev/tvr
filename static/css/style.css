@@ -848,6 +848,19 @@ dialog {
 dialog::backdrop { background: rgba(0,0,0,0.55); }
 dialog h3 { margin: 0 0 4px; font-size: 15px; }
 dialog form { display: grid; gap: 10px; }
+.file-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.file-pick button { flex: 0 0 auto; }
+.file-pick-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* —— EPG Viewer —— */
 .viewer {

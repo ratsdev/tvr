@@ -731,17 +731,30 @@ function wireRelays() {
     document.getElementById("import-url").value = "";
     document.getElementById("import-content").value = "";
     document.getElementById("import-file").value = "";
+    document.getElementById("import-filename").textContent = "No file selected";
     document.getElementById("import-ignore-groups").checked = false;
     document.getElementById("import-epg").checked = true;
     document.getElementById("import-error").textContent = "";
     document.getElementById("import-dialog").showModal();
   });
   document.getElementById("import-cancel").addEventListener("click", () => document.getElementById("import-dialog").close());
-  document.getElementById("import-file").addEventListener("change", async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    document.getElementById("import-content").value = await file.text();
-  });
+  onFilePick(
+    document.getElementById("import-file-pick"),
+    document.getElementById("import-file"),
+    async (file) => {
+      const nameEl = document.getElementById("import-filename");
+      const errEl = document.getElementById("import-error");
+      try {
+        const text = await file.text();
+        nameEl.textContent = file.name;
+        document.getElementById("import-content").value = text;
+        errEl.textContent = "";
+      } catch (err) {
+        nameEl.textContent = "No file selected";
+        errEl.textContent = err.message || "failed to read file";
+      }
+    },
+  );
   document.getElementById("import-save").addEventListener("click", async (e) => {
     e.preventDefault();
     const errEl = document.getElementById("import-error");

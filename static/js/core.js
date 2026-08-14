@@ -222,6 +222,16 @@ async function api(path, options = {}) {
   return data;
 }
 
+function onFilePick(pickEl, fileEl, handler) {
+  pickEl.addEventListener("click", () => fileEl.click());
+  fileEl.addEventListener("change", async () => {
+    const file = fileEl.files && fileEl.files[0];
+    fileEl.value = "";
+    if (!file) return;
+    await handler(file);
+  });
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
