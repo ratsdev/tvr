@@ -89,9 +89,17 @@ function renderLineup() {
   const byGroup = groupMembershipsByGroup(members);
   root.innerHTML = groups.map((g) => {
     const gm = [...(byGroup.get(g.id) || [])].sort((a, b) => a.sort_order - b.sort_order);
-    return `<section class="group" data-group-id="${g.id}" draggable="true">
+    const collapsed = state.collapsedGroups.has(g.id);
+    return `<section class="group${collapsed ? " collapsed" : ""}" data-group-id="${g.id}" draggable="true">
       <div class="group-head">
-        <div><span class="handle">☰</span> <strong>${esc(g.name)}</strong> <span class="muted">(${gm.length})</span></div>
+        <div class="group-title">
+          <span class="handle" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 3h12M2 8h12M2 13h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <button type="button" class="group-toggle" data-toggle-group="${g.id}" aria-expanded="${collapsed ? "false" : "true"}">
+            <span class="group-chevron" aria-hidden="true">▾</span>
+            <strong>${esc(g.name)}</strong>
+            <span class="muted">(${gm.length})</span>
+          </button>
+        </div>
         <div class="row">
           <button type="button" class="small" data-rename-group="${g.id}">Rename</button>
           <button type="button" class="small danger" data-del-group="${g.id}">Delete</button>
@@ -141,6 +149,10 @@ function bindDragDrop() {
   root.querySelectorAll(".group").forEach((el) => {
     el.addEventListener("dragstart", (e) => {
       if (e.target.closest(".member")) return;
+      if (e.target.closest("button, input")) {
+        e.preventDefault();
+        return;
+      }
       state.dragGroupId = Number(el.dataset.groupId);
       state.dragMemberId = null;
       e.dataTransfer.setData("text/plain", `group:${state.dragGroupId}`);
@@ -671,6 +683,17 @@ function wireRelays() {
   document.getElementById("relay-lineup").addEventListener("click", async (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement) || !state.currentRelay) return;
+    const toggle = t.closest("[data-toggle-group]");
+    if (toggle) {
+      const id = Number(toggle.dataset.toggleGroup);
+      if (state.collapsedGroups.has(id)) state.collapsedGroups.delete(id);
+      else state.collapsedGroups.add(id);
+      const section = toggle.closest(".group");
+      const collapsed = state.collapsedGroups.has(id);
+      section?.classList.toggle("collapsed", collapsed);
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      return;
+    }
     if (t.dataset.renameGroup) {
       const g = state.currentRelay.groups.find((x) => String(x.id) === t.dataset.renameGroup);
       if (g) openGroupDialog(g);

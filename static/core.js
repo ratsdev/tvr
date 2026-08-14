@@ -13,6 +13,7 @@ const state = {
   creatingEPG: false,
   dragMemberId: null,
   dragGroupId: null,
+  collapsedGroups: new Set(),
   filter: { channels: "", epgs: "", relays: "" },
   selected: {
     channels: new Set(),
