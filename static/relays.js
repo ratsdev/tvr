@@ -16,7 +16,7 @@ function renderRelayList() {
   document.getElementById("relay-count").textContent = `Relays (${state.relays.length})`;
   const list = document.getElementById("relay-list");
   if (!items.length) {
-    list.innerHTML = `<div class="empty-list">${state.relays.length ? "No matches" : "No relays yet"}</div>`;
+    list.innerHTML = `<div class="empty-list">${state.relays.length ? "No matches" : "No Relays yet"}</div>`;
   } else {
     list.innerHTML = items.map((r) => {
       const active = state.selectedRelayId === r.id ? "active" : "";
@@ -38,7 +38,6 @@ function showRelayEmpty() {
   document.getElementById("relay-editor").classList.add("hidden");
   state.currentRelay = null;
   state.editors.relayMeta.baseline = null;
-  state.editors.relayEpg.baseline = null;
   setDetailOpen("relays", false);
 }
 
@@ -66,19 +65,6 @@ async function loadRelays() {
   if (!state.selectedRelayId) showRelayEmpty();
 }
 
-function renderRelayEPGChecks() {
-  const box = document.getElementById("relay-epg-checks");
-  if (!state.currentRelay) return;
-  const selected = new Set(state.currentRelay.epg_source_ids || []);
-  if (!state.epgs.length) {
-    box.innerHTML = `<div class="empty-list">No EPG sources available</div>`;
-    return;
-  }
-  box.innerHTML = state.epgs.map((src) => `
-    <label><input type="checkbox" data-epg-id="${src.id}" ${selected.has(src.id) ? "checked" : ""}/> ${esc(src.name)}</label>
-  `).join("");
-}
-
 function syncMemberSelectionDOM() {
   document.querySelectorAll("#relay-lineup input[data-select-member]").forEach((cb) => {
     const id = Number(cb.dataset.selectMember);
@@ -96,7 +82,7 @@ function renderLineup() {
   const members = state.currentRelay.memberships || [];
   pruneSelection("members", new Set(members.map((m) => m.id)));
   if (!groups.length) {
-    root.innerHTML = `<div class="empty-list">No groups. Add a group first.</div>`;
+    root.innerHTML = `<div class="empty-list">No Groups. Add a Group first.</div>`;
     updateBulkBar("members", "member-bulk", "member-bulk-count");
     return;
   }
@@ -115,20 +101,21 @@ function renderLineup() {
         ${gm.map((m) => {
           const checked = state.selected.members.has(m.id) ? "checked" : "";
           const selected = checked ? "selected" : "";
+          const srcName = state.epgs.find((e) => e.id === m.epg_source_id)?.name;
           return `<div class="member ${selected}" draggable="true" data-member-id="${m.id}" data-group-id="${g.id}">
             <input type="checkbox" data-select-member="${m.id}" ${checked} />
             <span class="handle">⋮⋮</span>
             <div>
               <div class="member-title">#${esc(m.number)} · ${esc(m.channel_name)}</div>
-              <div class="sub">tvg-id=${esc(m.tvg_id || "—")}</div>
+              <div class="sub">${esc(membershipEPGLine(srcName, m.tvg_id))}</div>
             </div>
             <div class="row">
-              <button type="button" class="small" data-copy-stream="${esc(m.channel_id)}" title="Copy stream URL">Stream</button>
+              <button type="button" class="small" data-copy-stream="${esc(m.channel_id)}" title="Copy Stream URL">Stream</button>
               <button type="button" class="small" data-edit-member="${m.id}">Edit</button>
               <button type="button" class="small danger" data-del-member="${m.id}">Remove</button>
             </div>
           </div>`;
-        }).join("") || `<div class="empty-list">Drop channels here</div>`}
+        }).join("") || `<div class="empty-list">Drop Channels here</div>`}
       </div>
     </section>`;
   }).join("");
@@ -243,11 +230,11 @@ async function loadMemberTargets(relayId, member) {
   const groups = detail.groups || [];
   groupSel.innerHTML = groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")
     + `<option value="${MEMBER_NEW_GROUP}">(Create New Group)</option>`;
-  const epgs = state.epgs.filter((e) => (detail.epg_source_ids || []).includes(e.id));
-  epgSel.innerHTML = `<option value="">(none)</option>` + epgs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
+  epgSel.innerHTML = `<option value="">(None)</option>` + state.epgs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
   groupSel.value = member?.group_id ?? groups[0]?.id ?? MEMBER_NEW_GROUP;
   epgSel.value = member?.epg_source_id ?? "";
   showNewGroupField(groupSel.value === MEMBER_NEW_GROUP);
+  memberTvg.setEnabled(!!epgSel.value);
   return true;
 }
 
@@ -285,12 +272,11 @@ async function openMemberDialog(member, channelId) {
     channelWrap.classList.remove("hidden");
     relaySel.innerHTML = `<option value="${state.currentRelay.id}">${esc(state.currentRelay.name)}</option>`;
     channelSel.innerHTML = state.channels.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    document.getElementById("member-dialog-title").textContent = member ? "Edit membership" : "Add Channel";
+    document.getElementById("member-dialog-title").textContent = member ? "Edit Membership" : "Add Channel";
   }
 
   document.getElementById("member-id").value = member?.id || "";
   document.getElementById("member-channel").value = channelId || member?.channel_id || state.channels[0]?.id || "";
-  document.getElementById("member-tvg-id").value = member?.tvg_id || "";
   document.getElementById("member-error").textContent = "";
   try {
     if (!await loadMemberTargets(Number(relaySel.value), member)) return;
@@ -298,31 +284,150 @@ async function openMemberDialog(member, channelId) {
     toast.error("Failed to load relay", err.message);
     return;
   }
+  memberTvg.reset(member?.tvg_id || "");
   document.getElementById("member-dialog").showModal();
-  await refreshTvgSuggestions();
+  await memberTvg.resolveLabel(member?.tvg_id || "");
 }
 
-async function refreshTvgSuggestions() {
-  const sourceID = document.getElementById("member-epg-source").value;
-  const q = document.getElementById("member-tvg-id").value;
-  const list = document.getElementById("tvg-suggestions");
-  const gen = ++state.gens.tvg;
-  if (!sourceID) {
-    list.innerHTML = "";
-    return;
+const memberTvg = (() => {
+  let searchTimer = 0;
+  let blurTimer = 0;
+  const el = (id) => document.getElementById(id);
+
+  function sourceID() { return el("member-epg-source").value; }
+  function selectedID() { return el("member-tvg-id").value; }
+
+  function query() {
+    const qEl = el("member-tvg-q");
+    const q = qEl.value.trim();
+    const committed = (qEl.dataset.label || "").trim();
+    return !q || q === committed ? "" : q;
   }
-  try {
-    const items = await api(`/api/epg/sources/${sourceID}/channels?q=${encodeURIComponent(q)}&limit=30`);
-    if (!isCurrentGeneration(gen, state.gens.tvg)) return;
-    list.innerHTML = items.map((c) => {
-      const label = c.display_names?.[0] ? `${c.id} — ${c.display_names[0]}` : c.id;
-      return `<option value="${esc(c.id)}">${esc(label)}</option>`;
+
+  function setEnabled(on) {
+    el("member-tvg-q").disabled = !on;
+  }
+
+  function hidePop() {
+    el("member-tvg-pop").classList.add("hidden");
+  }
+
+  function setSelection(id, label) {
+    id = id || "";
+    const text = id ? (label || id) : "";
+    el("member-tvg-id").value = id;
+    const qEl = el("member-tvg-q");
+    qEl.dataset.label = text;
+    qEl.value = text;
+    el("member-tvg-clear").classList.toggle("hidden", !id);
+  }
+
+  function commit() {
+    clearTimeout(blurTimer);
+    hidePop();
+    const qEl = el("member-tvg-q");
+    if (!qEl.value.trim()) setSelection("");
+    else qEl.value = qEl.dataset.label || "";
+  }
+
+  function reset(id) {
+    setSelection(id || "");
+    hidePop();
+  }
+
+  function renderResults(hits) {
+    const selected = selectedID();
+    el("member-tvg-results").innerHTML = (hits || []).map((h) => {
+      const id = String(h.id);
+      const label = epgChannelLabel(h);
+      const active = id === selected ? "active" : "";
+      return `<button type="button" class="${active}" data-tvg-id="${esc(id)}" data-tvg-label="${esc(label)}">${esc(label)}</button>`;
     }).join("");
-  } catch {
-    if (!isCurrentGeneration(gen, state.gens.tvg)) return;
-    list.innerHTML = "";
   }
-}
+
+  function fetchChannels(q) {
+    return api(`/api/epg/sources/${sourceID()}/channels?q=${encodeURIComponent(q)}&limit=50`);
+  }
+
+  async function resolveLabel(id) {
+    if (!sourceID() || !id) return;
+    const gen = ++state.gens.tvg;
+    try {
+      const res = await fetchChannels(id);
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+      const exact = (res.channels || []).find((h) => h.id === id);
+      if (!exact || selectedID() !== id) return;
+      const qEl = el("member-tvg-q");
+      if (document.activeElement === qEl && query()) {
+        qEl.dataset.label = epgChannelLabel(exact);
+        return;
+      }
+      setSelection(id, epgChannelLabel(exact));
+    } catch { /* keep bare id */ }
+  }
+
+  async function search() {
+    const qEl = el("member-tvg-q");
+    const hintEl = el("member-tvg-hint");
+    const q = query();
+    if (!sourceID() || !q) {
+      hidePop();
+      hintEl.textContent = "";
+      renderResults([]);
+      return;
+    }
+    const gen = ++state.gens.tvg;
+    let hits = [];
+    let total = 0;
+    try {
+      const res = await fetchChannels(q);
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+      hits = res.channels || [];
+      total = res.total || 0;
+    } catch {
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+    }
+    hintEl.textContent = epgChannelHint(hits.length, total);
+    renderResults(hits);
+    if (document.activeElement === qEl) el("member-tvg-pop").classList.remove("hidden");
+    else hidePop();
+  }
+
+  function scheduleSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(search, 200);
+  }
+
+  function flushSearch() {
+    clearTimeout(searchTimer);
+    search();
+  }
+
+  function cancel() {
+    el("member-tvg-q").value = el("member-tvg-q").dataset.label || "";
+    commit();
+  }
+
+  function scheduleCommit() {
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(commit, 120);
+  }
+
+  function pick(id, label) {
+    clearTimeout(blurTimer);
+    setSelection(id, label);
+    hidePop();
+  }
+
+  function clear() {
+    clearTimeout(blurTimer);
+    setSelection("");
+    hidePop();
+    el("member-tvg-q").focus();
+  }
+
+  return { setEnabled, reset, commit, resolveLabel, scheduleSearch, flushSearch, cancel, scheduleCommit, pick, clear };
+})();
 
 function wireRelays() {
   document.getElementById("relay-search").addEventListener("input", (e) => {
@@ -400,7 +505,7 @@ function wireRelays() {
     copyText("EPG", url);
   });
   document.getElementById("btn-del-relay").addEventListener("click", async () => {
-    if (!state.currentRelay || !confirm("Delete this relay?")) return;
+    if (!state.currentRelay || !confirm("Delete this Relay?")) return;
     try {
       const id = state.currentRelay.id;
       await api(`/api/relays/${id}`, { method: "DELETE" });
@@ -441,7 +546,7 @@ function wireRelays() {
     const errEl = document.getElementById("group-error");
     const name = document.getElementById("group-name").value.trim();
     const id = document.getElementById("group-id").value;
-    if (!name) { errEl.textContent = "Enter a group name"; return; }
+    if (!name) { errEl.textContent = "Enter a Group name"; return; }
     errEl.textContent = "";
     try {
       if (id) {
@@ -452,7 +557,7 @@ function wireRelays() {
       document.getElementById("group-dialog").close();
       await refreshRelayLineup();
       toast.success(id ? "Group renamed" : "Group added", name);
-    } catch (err) { errEl.textContent = err.message; toast.error(id ? "Rename failed" : "Add group failed", err.message); }
+    } catch (err) { errEl.textContent = err.message; toast.error(id ? "Rename failed" : "Add Group failed", err.message); }
   });
   document.getElementById("btn-add-member").addEventListener("click", async () => {
     if (!state.channels.length) { toast.info("Add channels first"); return; }
@@ -478,11 +583,10 @@ function wireRelays() {
     document.getElementById("member-save").click();
   });
   document.getElementById("member-relay").addEventListener("change", async () => {
-    document.getElementById("member-tvg-id").value = "";
+    memberTvg.reset("");
     document.getElementById("member-error").textContent = "";
     try {
       if (!await loadMemberTargets(Number(document.getElementById("member-relay").value), null)) return;
-      await refreshTvgSuggestions();
     } catch (err) {
       document.getElementById("member-error").textContent = err.message;
     }
@@ -492,25 +596,44 @@ function wireRelays() {
     showNewGroupField(creating);
     if (creating) document.getElementById("member-new-group").focus();
   });
-  document.getElementById("member-tvg-id").addEventListener("input", () => {
-    clearTimeout(window.__tvgTimer);
-    window.__tvgTimer = setTimeout(refreshTvgSuggestions, 200);
+  document.getElementById("member-tvg-q").addEventListener("input", () => memberTvg.scheduleSearch());
+  document.getElementById("member-tvg-q").addEventListener("focus", () => {
+    const qEl = document.getElementById("member-tvg-q");
+    if (qEl.dataset.label && qEl.value === qEl.dataset.label) qEl.select();
   });
+  document.getElementById("member-tvg-q").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      memberTvg.cancel();
+      return;
+    }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    memberTvg.flushSearch();
+  });
+  document.getElementById("member-tvg-q").addEventListener("blur", () => memberTvg.scheduleCommit());
+  document.getElementById("member-tvg-pop").addEventListener("mousedown", (e) => e.preventDefault());
+  document.getElementById("member-tvg-results").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-tvg-id]");
+    if (btn) memberTvg.pick(btn.dataset.tvgId, btn.dataset.tvgLabel);
+  });
+  document.getElementById("member-tvg-clear").addEventListener("click", () => memberTvg.clear());
   document.getElementById("member-save").addEventListener("click", async (e) => {
     e.preventDefault();
+    memberTvg.commit();
     const errEl = document.getElementById("member-error");
     const saveBtn = document.getElementById("member-save");
     errEl.textContent = "";
     const relayId = Number(document.getElementById("member-relay").value);
-    if (!relayId) { errEl.textContent = "Select a relay"; return; }
+    if (!relayId) { errEl.textContent = "Select a Relay"; return; }
     const epgRaw = document.getElementById("member-epg-source").value;
     const channelId = document.getElementById("member-channel").value;
-    if (!channelId) { errEl.textContent = "Select a channel"; return; }
+    if (!channelId) { errEl.textContent = "Select a Channel"; return; }
     const id = document.getElementById("member-id").value;
     const relayName = document.getElementById("member-relay").selectedOptions[0]?.textContent || "";
     const groupRaw = document.getElementById("member-group").value;
     const newGroupName = document.getElementById("member-new-group").value.trim();
-    if (groupRaw === MEMBER_NEW_GROUP && !newGroupName) { errEl.textContent = "Enter a group name"; return; }
+    if (groupRaw === MEMBER_NEW_GROUP && !newGroupName) { errEl.textContent = "Enter a Group name"; return; }
     saveBtn.disabled = true;
     try {
       let groupId = Number(groupRaw);
@@ -552,7 +675,7 @@ function wireRelays() {
       const g = state.currentRelay.groups.find((x) => String(x.id) === t.dataset.renameGroup);
       if (g) openGroupDialog(g);
     } else if (t.dataset.delGroup) {
-      if (!confirm("Delete group?")) return;
+      if (!confirm("Delete Group?")) return;
       try {
         const groupId = t.dataset.delGroup;
         await api(`/api/relays/${state.currentRelay.id}/groups/${groupId}`, { method: "DELETE" });
@@ -568,7 +691,7 @@ function wireRelays() {
       const m = state.currentRelay.memberships.find((x) => String(x.id) === t.dataset.editMember);
       await openMemberDialog(m);
     } else if (t.dataset.delMember) {
-      if (!confirm("Remove channel from relay?")) return;
+      if (!confirm("Remove Channel from Relay?")) return;
       try {
         await api(`/api/relays/${state.currentRelay.id}/memberships/${t.dataset.delMember}`, { method: "DELETE" });
         state.selected.members.delete(Number(t.dataset.delMember));
@@ -633,22 +756,8 @@ function wireRelays() {
     }
   });
 
-  document.getElementById("btn-save-relay-epg").addEventListener("click", async () => {
-    if (!state.currentRelay) return;
-    try {
-      const ids = [...document.querySelectorAll("#relay-epg-checks input:checked")].map((el) => Number(el.dataset.epgId));
-      const detail = await api(`/api/relays/${state.currentRelay.id}/epg-sources`, {
-        method: "PUT",
-        body: JSON.stringify({ epg_source_ids: ids }),
-      });
-      state.currentRelay = {
-        ...state.currentRelay,
-        epg_source_ids: detail.epg_source_ids,
-      };
-      renderRelayEPGChecks();
-      state.editors.relayEpg.baseline = readRelayEpgDraft();
-      toast.success("EPG selection saved");
-    } catch (err) { toast.error("Save failed", err.message); }
+  document.getElementById("member-epg-source").addEventListener("change", () => {
+    memberTvg.setEnabled(!!document.getElementById("member-epg-source").value);
+    memberTvg.reset("");
   });
-  document.getElementById("member-epg-source").addEventListener("change", refreshTvgSuggestions);
 }

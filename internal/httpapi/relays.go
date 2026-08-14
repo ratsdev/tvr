@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jqjiang/tvr/internal/core/epg"
 	"github.com/jqjiang/tvr/internal/core/store"
 )
 
@@ -101,31 +102,6 @@ func (s *Server) handleDeleteRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) handleSetRelayEPGSources(w http.ResponseWriter, r *http.Request) {
-	id, err := pathID(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	var body struct {
-		EPGSourceIDs []int64 `json:"epg_source_ids"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.store.SetRelayEPGSources(r.Context(), id, body.EPGSourceIDs); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	detail, err := s.store.GetRelayDetail(r.Context(), id)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, detail)
 }
 
 func (s *Server) handleReplaceRelayLayout(w http.ResponseWriter, r *http.Request) {
@@ -286,8 +262,12 @@ func (s *Server) handleRelayPlaylist(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `#EXTM3U url-tvg="%s/r/%s/epg.xml"`+"\n", base, slug)
 	for _, e := range lineup {
 		attrs := make([]string, 0, 5)
-		if e.TvgID != "" {
-			attrs = append(attrs, fmt.Sprintf(`tvg-id="%s"`, escapeAttr(e.TvgID)))
+		var sourceID int64
+		if e.EPGSourceID != nil {
+			sourceID = *e.EPGSourceID
+		}
+		if pub := epg.PublicTvgID(sourceID, e.TvgID); pub != "" {
+			attrs = append(attrs, fmt.Sprintf(`tvg-id="%s"`, escapeAttr(pub)))
 		}
 		attrs = append(attrs, fmt.Sprintf(`tvg-name="%s"`, escapeAttr(e.Name)))
 		if e.LogoURL != "" {

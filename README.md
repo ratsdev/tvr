@@ -40,7 +40,7 @@ Optionally set `TVR_BASE_URL` to a fixed public origin. If unset, playlist and U
 
 1. Add channels under **Channels**, or **Import M3U** under **Relays**.
 2. Optionally enable **Transcode with global profile** on channels that need re-encoding; tune the profile under **Settings**.
-3. Create/edit a relay: select EPG sources, organize groups, set each channel’s `tvg-id`.
+3. Create/edit a relay: organize groups, then pick an EPG channel on each membership.
 4. Point players at:
    - Playlist: `http://<host>:8080/r/<slug>/playlist.m3u`
    - EPG: `http://<host>:8080/r/<slug>/epg.xml`

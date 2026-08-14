@@ -124,18 +124,17 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 		Entries:            entries,
 	}
 
-	// Multi-url-tvg playlists need tvg-id → source disambiguation from cached
-	// indexes. Single-url-tvg binding (only for entries that have tvg-id) is
-	// handled by ImportRelay. When no playlist EPG sources are cached yet,
-	// every tvg-id is unmatched until after refresh.
+	// Match playlist tvg-ids against cached url-tvg sources only. Sole-source
+	// binding for uncached first imports is handled by ImportRelay.
 	var unmatched, ambiguous []string
-	if len(epgURLs) > 1 {
+	if len(epgURLs) > 0 {
 		existingEPGIDs := make([]int64, 0, len(epgURLs))
 		for _, epgURL := range epgURLs {
 			if src, err := s.store.FindEPGSourceByURL(r.Context(), epgURL); err == nil {
 				existingEPGIDs = append(existingEPGIDs, src.ID)
 			}
 		}
+		eligible := s.epg.CountEligibleSources(existingEPGIDs)
 		for i := range spec.Entries {
 			tvgID := spec.Entries[i].TvgID
 			if tvgID == "" {
@@ -147,7 +146,9 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 			}
 			switch len(matches) {
 			case 0:
-				unmatched = utils.AppendUnique(unmatched, tvgID)
+				if eligible > 0 {
+					unmatched = utils.AppendUnique(unmatched, tvgID)
+				}
 			case 1:
 				id := matches[0]
 				spec.Entries[i].EPGSourceID = &id

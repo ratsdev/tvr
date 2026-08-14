@@ -62,6 +62,26 @@ function assignProgrammeLanes(programmes) {
   return { programmes: laid, laneCount: Math.max(1, laneEnds.length) };
 }
 
+/** Label for an EPG channel hit. Raw text; escape at render time. */
+function epgChannelLabel(hit) {
+  if (!hit || hit.id == null || hit.id === "") return "";
+  const id = String(hit.id);
+  const name = (hit.display_names && hit.display_names[0]) || "";
+  return name ? `${name} (${id})` : id;
+}
+
+/** Lineup subtitle for a membership EPG binding. Raw text; escape at render time. */
+function membershipEPGLine(sourceName, tvgID) {
+  return `EPG:${sourceName || "—"} ID:${tvgID || "—"}`;
+}
+
+/** Hint under the EPG channel search results. */
+function epgChannelHint(shown, total) {
+  if (total === 0) return "No matching Channels";
+  if (total > shown) return `Showing ${shown} of ${total}`;
+  return "";
+}
+
 /** Pre-group memberships by group_id before rendering. */
 function groupMembershipsByGroup(memberships) {
   const map = new Map();
@@ -85,6 +105,9 @@ if (typeof module !== "undefined" && module.exports) {
     editorClearedByDeletes,
     shouldResetViewerScroll,
     assignProgrammeLanes,
+    epgChannelLabel,
+    membershipEPGLine,
+    epgChannelHint,
     groupMembershipsByGroup,
   };
 }

@@ -182,23 +182,21 @@ func TestRelayLayoutAndUniqueMembership(t *testing.T) {
 	}
 }
 
-func TestEPGBindingRequiredForMembership(t *testing.T) {
+func TestMembershipRequiresExistingEPGSource(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
 	epg, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "R", Slug: "r2"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
-	id := epg.ID
+	missing := int64(9999)
 	_, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &id, TvgID: "x",
+		ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &missing, TvgID: "x",
 	})
 	if !errors.Is(err, store.ErrValidation) {
 		t.Fatalf("expected validation, got %v", err)
 	}
-	if err := st.SetRelayEPGSources(ctx, relay.ID, []int64{epg.ID}); err != nil {
-		t.Fatal(err)
-	}
+	id := epg.ID
 	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
 		ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &id, TvgID: "x",
 	}); err != nil {
@@ -206,50 +204,43 @@ func TestEPGBindingRequiredForMembership(t *testing.T) {
 	}
 }
 
-func TestMembershipTvgUniquenessRollsBack(t *testing.T) {
+func TestDuplicateTvgIDAcrossSourcesAllowed(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	ch1, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
 	ch2, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
 	epg1, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G1", URL: "http://example.com/epg1.xml"}, time.Hour)
 	epg2, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G2", URL: "http://example.com/epg2.xml"}, time.Hour)
-	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "R", Slug: "tvg-uniq"})
+	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "R", Slug: "tvg-dup"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
-	if err := st.SetRelayEPGSources(ctx, relay.ID, []int64{epg1.ID, epg2.ID}); err != nil {
-		t.Fatal(err)
-	}
 	id1, id2 := epg1.ID, epg2.ID
-	m1, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
+	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
 		ChannelID: ch1.ID, GroupID: groups[0].ID, EPGSourceID: &id1, TvgID: "same",
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
 		ChannelID: ch2.ID, GroupID: groups[0].ID, EPGSourceID: &id2, TvgID: "same",
-	}); !errors.Is(err, store.ErrValidation) {
-		t.Fatalf("expected validation, got %v", err)
+	}); err != nil {
+		t.Fatal(err)
 	}
 	members, err := st.ListRelayMemberships(ctx, relay.ID)
-	if err != nil || len(members) != 1 || members[0].ID != m1.ID {
-		t.Fatalf("add should roll back conflict; members=%+v err=%v", members, err)
+	if err != nil || len(members) != 2 {
+		t.Fatalf("same tvg-id on two sources should save; members=%+v err=%v", members, err)
 	}
 
 	ch3, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "C", UpstreamURL: "http://example.com/c.ts"})
-	m2, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
+	m3, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
 		ChannelID: ch3.ID, GroupID: groups[0].ID, EPGSourceID: &id1, TvgID: "other",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.UpdateMembership(ctx, m2.ID, store.MembershipInput{
+	got, err := st.UpdateMembership(ctx, m3.ID, store.MembershipInput{
 		ChannelID: ch3.ID, GroupID: groups[0].ID, EPGSourceID: &id2, TvgID: "same",
-	}); !errors.Is(err, store.ErrValidation) {
-		t.Fatalf("expected update validation, got %v", err)
-	}
-	got, err := st.GetMembership(ctx, m2.ID)
-	if err != nil || got.TvgID != "other" || got.EPGSourceID == nil || *got.EPGSourceID != id1 {
-		t.Fatalf("update should roll back; got=%+v err=%v", got, err)
+	})
+	if err != nil || got.TvgID != "same" || got.EPGSourceID == nil || *got.EPGSourceID != id2 {
+		t.Fatalf("update to shared source tvg-id should save; got=%+v err=%v", got, err)
 	}
 }
 

@@ -8,6 +8,9 @@ const {
   editorClearedByDeletes,
   shouldResetViewerScroll,
   assignProgrammeLanes,
+  epgChannelLabel,
+  membershipEPGLine,
+  epgChannelHint,
   groupMembershipsByGroup,
 } = require("./state.js");
 
@@ -77,6 +80,26 @@ test("assignProgrammeLanes computes laneCount once", () => {
   assert.equal(programmes.find((p) => p.id === "b").lane, 1);
   assert.equal(programmes.find((p) => p.id === "c").lane, 0);
   assert.equal(programmes.every((p) => p.laneCount === undefined), true);
+});
+
+test("epgChannelLabel", () => {
+  assert.equal(epgChannelLabel({ id: "cnn", display_names: ["CNN"] }), "CNN (cnn)");
+  assert.equal(epgChannelLabel({ id: "news" }), "news");
+  assert.equal(epgChannelLabel({ id: "" }), "");
+});
+
+test("membershipEPGLine includes source and tvg-id", () => {
+  assert.equal(membershipEPGLine("Guide", "cnn"), "EPG:Guide ID:cnn");
+  assert.equal(membershipEPGLine("", "cnn"), "EPG:— ID:cnn");
+  assert.equal(membershipEPGLine("Guide", ""), "EPG:Guide ID:—");
+  assert.equal(membershipEPGLine("", ""), "EPG:— ID:—");
+});
+
+test("epgChannelHint covers search paging", () => {
+  assert.equal(epgChannelHint(30, 30), "");
+  assert.equal(epgChannelHint(50, 1500), "Showing 50 of 1500");
+  assert.equal(epgChannelHint(0, 0), "No matching Channels");
+  assert.equal(epgChannelHint(50, 180), "Showing 50 of 180");
 });
 
 test("groupMembershipsByGroup pre-groups with Map", () => {

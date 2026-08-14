@@ -11,7 +11,7 @@ function fillViewerSources() {
   const prev = state.viewer.sourceId || sel.value;
   const opts = state.epgs.map((s) =>
     `<option value="${s.id}">${esc(s.name)}${s.enabled ? "" : " (disabled)"}</option>`).join("");
-  sel.innerHTML = opts || `<option value="">No EPG sources</option>`;
+  sel.innerHTML = opts || `<option value="">No EPG Sources</option>`;
   if (prev && state.epgs.some((s) => String(s.id) === String(prev))) {
     sel.value = String(prev);
   }
@@ -40,7 +40,7 @@ function renderViewer() {
   if (!v.sourceId) {
     status.textContent = "";
     pageLabel.textContent = "—";
-    body.innerHTML = `<div class="empty-list">Select an EPG source</div>`;
+    body.innerHTML = `<div class="empty-list">Select an EPG Source</div>`;
     return;
   }
   if (v.loading && !v.data) {
@@ -76,7 +76,7 @@ function renderViewer() {
   status.innerHTML = chips.join(`<span class="sep" aria-hidden="true">·</span>`);
 
   if (!v.data.channels?.length) {
-    body.innerHTML = `<div class="empty-list">${v.q ? "No matching channels" : "No channels in this source"}</div>`;
+    body.innerHTML = `<div class="empty-list">${v.q ? "No matching Channels" : "No Channels in this source"}</div>`;
     return;
   }
 

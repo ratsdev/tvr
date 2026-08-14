@@ -23,6 +23,14 @@ type ChannelInfo struct {
 	DisplayNames []string `json:"display_names"`
 }
 
+// ChannelSearchResult is a page of source channels plus the unpaged match count.
+type ChannelSearchResult struct {
+	Channels []ChannelInfo `json:"channels"`
+	Total    int           `json:"total"`
+}
+
+const epgChannelSearchCap = 50
+
 // Service refreshes, filters, and serves per-relay XMLTV data.
 type Service struct {
 	store     *store.Store
@@ -209,33 +217,67 @@ func (s *Service) RefreshSource(ctx context.Context, id int64) error {
 	return s.drain(ctx)
 }
 
-// SearchSourceChannels returns indexed channels for an EPG source.
-func (s *Service) SearchSourceChannels(sourceID int64, q string, limit int) []ChannelInfo {
-	if limit <= 0 {
-		limit = 50
-	}
+// SearchSourceChannels returns a page of indexed channels for an EPG source.
+func (s *Service) SearchSourceChannels(sourceID int64, q string, limit int) ChannelSearchResult {
 	src, err := s.store.GetEPGSource(context.Background(), sourceID)
 	if err != nil {
-		return []ChannelInfo{}
+		return pageChannelSearch(nil, limit)
 	}
 	_, _, tag, ok := s.eligibleSource(sourceID, src.URL)
 	if !ok {
-		return []ChannelInfo{}
+		return pageChannelSearch(nil, limit)
 	}
 	q = strings.ToLower(strings.TrimSpace(q))
 	var out []ChannelInfo
 	for _, ch := range tag.Channels {
 		if q == "" || strings.Contains(strings.ToLower(ch.ID), q) || namesContain(ch.DisplayNames, q) {
 			out = append(out, ch)
-			if len(out) >= limit {
-				break
-			}
 		}
 	}
-	if out == nil {
-		out = []ChannelInfo{}
+	sort.SliceStable(out, func(i, j int) bool {
+		return channelSearchLess(q, out[i], out[j])
+	})
+	return pageChannelSearch(out, limit)
+}
+
+func channelSearchLess(q string, a, b ChannelInfo) bool {
+	if q != "" {
+		ea := strings.EqualFold(a.ID, q)
+		eb := strings.EqualFold(b.ID, q)
+		if ea != eb {
+			return ea
+		}
 	}
-	return out
+	return guideChannelLess(channelSortName(a), a.ID, channelSortName(b), b.ID)
+}
+
+func pageChannelSearch(matches []ChannelInfo, limit int) ChannelSearchResult {
+	if matches == nil {
+		matches = []ChannelInfo{}
+	}
+	if limit <= 0 {
+		limit = epgChannelSearchCap
+	}
+	total := len(matches)
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return ChannelSearchResult{Channels: matches, Total: total}
+}
+
+// CountEligibleSources returns how many of the given sources have a loaded index.
+func (s *Service) CountEligibleSources(sourceIDs []int64) int {
+	n := 0
+	for _, id := range sourceIDs {
+		src, err := s.store.GetEPGSource(context.Background(), id)
+		if err != nil {
+			continue
+		}
+		if _, _, _, ok := s.eligibleSource(id, src.URL); ok {
+			n++
+		}
+	}
+	return n
 }
 
 // FindSourceIDsByTvgID returns source IDs that contain a tvg-id.
@@ -293,14 +335,8 @@ func (s *Service) setError(msg string) {
 }
 
 func indexFromDoc(doc *tvDocument) []ChannelInfo {
-	ids := make([]string, 0, len(doc.Channels))
-	for id := range doc.Channels {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	out := make([]ChannelInfo, 0, len(ids))
-	for _, id := range ids {
-		ch := doc.Channels[id]
+	out := make([]ChannelInfo, 0, len(doc.Channels))
+	for id, ch := range doc.Channels {
 		info := ChannelInfo{ID: id}
 		for _, dn := range ch.DisplayNames {
 			if dn.Text != "" {
@@ -309,6 +345,9 @@ func indexFromDoc(doc *tvDocument) []ChannelInfo {
 		}
 		out = append(out, info)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return guideChannelLess(channelSortName(out[i]), out[i].ID, channelSortName(out[j]), out[j].ID)
+	})
 	return out
 }
 

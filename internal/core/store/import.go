@@ -103,9 +103,6 @@ INSERT INTO relays (name, slug, created_at, updated_at) VALUES (?, ?, ?, ?)`,
 			}
 			epgIDs = append(epgIDs, src.ID)
 		}
-		if err := setRelayEPGSourcesTx(ctx, tx, relayID, epgIDs); err != nil {
-			return err
-		}
 		result.EPGSourceIDs = epgIDs
 
 		type groupState struct {
@@ -368,34 +365,3 @@ FROM epg_sources WHERE id = ?`, id)
 	return scanEPGSource(row)
 }
 
-func setRelayEPGSourcesTx(ctx context.Context, tx *sql.Tx, relayID int64, sourceIDs []int64) error {
-	seen := map[int64]struct{}{}
-	clean := make([]int64, 0, len(sourceIDs))
-	for _, id := range sourceIDs {
-		if id <= 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM epg_sources WHERE id = ?`, id).Scan(&exists); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: epg source %d not found", ErrValidation, id)
-			}
-			return err
-		}
-		clean = append(clean, id)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM relay_epg_sources WHERE relay_id = ?`, relayID); err != nil {
-		return err
-	}
-	for _, id := range clean {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO relay_epg_sources (relay_id, epg_source_id) VALUES (?, ?)`, relayID, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}

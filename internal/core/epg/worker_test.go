@@ -45,7 +45,6 @@ func TestIncompleteRebuildPreservesRelayXML(t *testing.T) {
 	chA, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
 	chB, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
-	_ = st.SetRelayEPGSources(ctx, relay.ID, []int64{srcA.ID, srcB.ID})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
 	idA, idB := srcA.ID, srcB.ID
 	_, _ = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chA.ID, GroupID: groups[0].ID, EPGSourceID: &idA, TvgID: "a.id"})
@@ -126,7 +125,6 @@ func TestRelayCleanupMultiSlugAndOwnership(t *testing.T) {
 	src, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: upstream.URL, RefreshInterval: "1h"}, time.Hour)
 	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
 	relayA, _ := st.CreateRelay(ctx, store.RelayInput{Name: "A", Slug: "slug-a"})
-	_ = st.SetRelayEPGSources(ctx, relayA.ID, []int64{src.ID})
 	groups, _ := st.ListRelayGroups(ctx, relayA.ID)
 	id := src.ID
 	_, _ = st.AddMembership(ctx, relayA.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &id, TvgID: "a.id"})
@@ -169,7 +167,6 @@ func TestRelayCleanupMultiSlugAndOwnership(t *testing.T) {
 	// Reuse old slug on another relay — cleanup must not delete the new owner's file.
 	ch2, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
 	relayB, _ := st.CreateRelay(ctx, store.RelayInput{Name: "B", Slug: "slug-a"})
-	_ = st.SetRelayEPGSources(ctx, relayB.ID, []int64{src.ID})
 	groupsB, _ := st.ListRelayGroups(ctx, relayB.ID)
 	_, _ = st.AddMembership(ctx, relayB.ID, store.MembershipInput{ChannelID: ch2.ID, GroupID: groupsB[0].ID, EPGSourceID: &id, TvgID: "a.id"})
 	_ = svc.EnqueueRebuildRelays([]int64{relayB.ID})

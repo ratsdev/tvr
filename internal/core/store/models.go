@@ -132,9 +132,8 @@ type MembershipInput struct {
 // RelayDetail is a full relay editor payload.
 type RelayDetail struct {
 	Relay
-	EPGSourceIDs []int64           `json:"epg_source_ids"`
-	Groups       []RelayGroup      `json:"groups"`
-	Memberships  []RelayMembership `json:"memberships"`
+	Groups      []RelayGroup      `json:"groups"`
+	Memberships []RelayMembership `json:"memberships"`
 }
 
 // RelayLayout is used for atomic drag/drop persistence.

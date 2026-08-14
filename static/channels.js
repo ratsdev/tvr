@@ -94,7 +94,7 @@ function renderChannelList() {
   const list = document.getElementById("channel-list");
   updateTestAllButton();
   if (!items.length) {
-    list.innerHTML = `<div class="empty-list">${state.channels.length ? "No matches" : "No channels yet"}</div>`;
+    list.innerHTML = `<div class="empty-list">${state.channels.length ? "No matches" : "No Channels yet"}</div>`;
   } else {
     list.innerHTML = items.map((ch) => {
       const active = !state.creatingChannel && state.selectedChannelId === ch.id ? "active" : "";
@@ -531,7 +531,7 @@ function wireChannels() {
   });
   document.getElementById("btn-del-channel").addEventListener("click", async () => {
     const id = state.selectedChannelId;
-    if (!id || !confirm("Delete this channel?")) return;
+    if (!id || !confirm("Delete this Channel?")) return;
     try {
       await api(`/api/channels/${id}`, { method: "DELETE" });
       applyChannelDeletes([id]);

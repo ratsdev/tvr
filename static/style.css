@@ -463,7 +463,6 @@ main {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
-.editor-actions { margin: 0; }
 .lineup-head {
   display: flex;
   flex-wrap: wrap;
@@ -555,6 +554,51 @@ input[type="checkbox"] {
 }
 input[type="search"] { padding-left: 9px; }
 textarea { resize: vertical; min-height: 64px; }
+.epg-search { position: relative; }
+.epg-search input { padding-right: 28px; }
+.epg-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  z-index: 1;
+}
+.epg-pop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  z-index: 8;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  max-height: 220px;
+  overflow: auto;
+}
+.epg-results { display: grid; gap: 1px; padding: 4px; }
+.epg-results:empty { display: none; }
+.epg-results button {
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 13px;
+}
+.epg-results button:hover { filter: none; background: var(--select); }
+.epg-results button.active { background: var(--select); }
+.epg-pop-hint { padding: 4px 8px 6px; font-size: 12px; }
+.epg-pop-hint:empty { display: none; }
 .actions { display: flex; justify-content: flex-end; gap: 6px; }
 .error { color: var(--danger); min-height: 1em; margin: 0; font-size: 12px; }
 .status-line {
@@ -612,23 +656,6 @@ textarea { resize: vertical; min-height: 64px; }
 .badge.ok, .badge.enabled, .badge.streaming { color: var(--ok); border-color: rgba(74, 222, 128, 0.35); }
 .badge.warn, .badge.connecting { color: var(--warn); }
 .badge.err, .badge.error { color: var(--danger); border-color: rgba(248, 113, 113, 0.35); }
-
-.checks {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 6px;
-}
-.checks label {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
-}
 
 .lineup {
   display: flex;

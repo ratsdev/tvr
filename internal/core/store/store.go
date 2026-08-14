@@ -114,12 +114,6 @@ CREATE TABLE IF NOT EXISTS relays (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS relay_epg_sources (
-  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
-  epg_source_id INTEGER NOT NULL REFERENCES epg_sources(id) ON DELETE RESTRICT,
-  PRIMARY KEY (relay_id, epg_source_id)
-);
-
 CREATE TABLE IF NOT EXISTS relay_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
@@ -155,7 +149,15 @@ CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(ch
 	if err := s.ensureAppSettingsRow(); err != nil {
 		return err
 	}
+	if err := s.ensureNoRelayEPGSources(); err != nil {
+		return err
+	}
 	return s.ensureChannelNameUniqueIndex()
+}
+
+func (s *Store) ensureNoRelayEPGSources() error {
+	_, err := s.db.Exec(`DROP TABLE IF EXISTS relay_epg_sources`)
+	return err
 }
 
 func (s *Store) ensureChannelUpstreams() error {
@@ -658,18 +660,13 @@ func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
 	return nil
 }
 
-// EPGSourceRelayNames returns relay names that bind or use an EPG source.
+// EPGSourceRelayNames returns relay names that use an EPG source on a membership.
 func (s *Store) EPGSourceRelayNames(ctx context.Context, epgSourceID int64) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT DISTINCT name FROM (
-  SELECT r.name AS name FROM relays r
-  JOIN relay_epg_sources re ON re.relay_id = r.id
-  WHERE re.epg_source_id = ?
-  UNION
-  SELECT r.name AS name FROM relays r
-  JOIN relay_memberships m ON m.relay_id = r.id
-  WHERE m.epg_source_id = ?
-) ORDER BY name`, epgSourceID, epgSourceID)
+SELECT DISTINCT r.name FROM relays r
+JOIN relay_memberships m ON m.relay_id = r.id
+WHERE m.epg_source_id = ?
+ORDER BY r.name`, epgSourceID)
 	if err != nil {
 		return nil, err
 	}

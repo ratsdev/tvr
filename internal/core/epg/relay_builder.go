@@ -36,20 +36,24 @@ func (s *Service) writeRelayCache(slug string, doc *tvDocument) error {
 	return os.Rename(tmpName, path)
 }
 
-func mergeDocument(dst, src *tvDocument, allowed map[string]struct{}) {
+func mergeDocument(dst, src *tvDocument, rewrite map[string]string) {
 	if src == nil {
 		return
 	}
 	for id, ch := range src.Channels {
-		if _, ok := allowed[id]; !ok {
+		publicID, ok := rewrite[id]
+		if !ok {
 			continue
 		}
-		dst.Channels[id] = ch
+		ch.ID = publicID
+		dst.Channels[publicID] = ch
 	}
 	for _, prog := range src.Programmes {
-		if _, ok := allowed[prog.Channel]; !ok {
+		publicID, ok := rewrite[prog.Channel]
+		if !ok {
 			continue
 		}
+		prog.Channel = publicID
 		dst.Programmes = append(dst.Programmes, prog)
 	}
 }
@@ -86,16 +90,20 @@ func (s *Service) processRelay(ctx context.Context, relayID int64) error {
 	if err != nil {
 		return err
 	}
-	allowed := map[int64]map[string]struct{}{}
+	allowed := map[int64]map[string]string{}
 	needed := map[int64]struct{}{}
 	for _, m := range mappings {
 		if m.RelayID != relayID {
 			continue
 		}
-		if allowed[m.EPGSourceID] == nil {
-			allowed[m.EPGSourceID] = map[string]struct{}{}
+		publicID := PublicTvgID(m.EPGSourceID, m.TvgID)
+		if publicID == "" {
+			continue
 		}
-		allowed[m.EPGSourceID][m.TvgID] = struct{}{}
+		if allowed[m.EPGSourceID] == nil {
+			allowed[m.EPGSourceID] = map[string]string{}
+		}
+		allowed[m.EPGSourceID][m.TvgID] = publicID
 		needed[m.EPGSourceID] = struct{}{}
 	}
 

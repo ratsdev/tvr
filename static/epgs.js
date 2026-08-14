@@ -32,7 +32,7 @@ function renderEPGList() {
   document.getElementById("epg-count").textContent = `EPG Sources (${state.epgs.length})`;
   const list = document.getElementById("epg-list");
   if (!items.length) {
-    list.innerHTML = `<div class="empty-list">${state.epgs.length ? "No matches" : "No EPG sources yet"}</div>`;
+    list.innerHTML = `<div class="empty-list">${state.epgs.length ? "No matches" : "No EPG Sources yet"}</div>`;
   } else {
     list.innerHTML = items.map((src) => {
       const active = !state.creatingEPG && state.selectedEPGId === src.id ? "active" : "";
@@ -139,10 +139,6 @@ async function loadEPG({ withStatus = true } = {}) {
   }
   renderEPGList();
   showEPGDetail({ forceFill: false });
-  if (state.currentRelay && document.getElementById("relay-epg-checks") && !isRelayEpgDirty()) {
-    renderRelayEPGChecks();
-    state.editors.relayEpg.baseline = readRelayEpgDraft();
-  }
 }
 
 async function applyEPGSave(saved) {
@@ -209,7 +205,7 @@ function wireEPGs() {
   });
   document.getElementById("btn-del-epgs").addEventListener("click", async () => {
     const ids = [...state.selected.epgs];
-    const res = await bulkDelete("EPG source(s)", ids, (id) => api(`/api/epg/sources/${id}`, { method: "DELETE" }));
+    const res = await bulkDelete("EPG Source(s)", ids, (id) => api(`/api/epg/sources/${id}`, { method: "DELETE" }));
     if (!res) return;
     applyEPGDeletes(res.successfulIDs);
   });
@@ -229,21 +225,21 @@ function wireEPGs() {
         ? await api(`/api/epg/sources/${id}`, { method: "PUT", body: JSON.stringify(body) })
         : await api("/api/epg/sources", { method: "POST", body: JSON.stringify(body) });
       await applyEPGSave(saved);
-      toast.success(id ? "EPG source updated" : "EPG source created");
+      toast.success(id ? "EPG Source updated" : "EPG Source created");
     } catch (err) { errEl.textContent = err.message; toast.error("Save failed", err.message); }
   });
   document.getElementById("btn-del-epg").addEventListener("click", async () => {
     const id = state.selectedEPGId;
-    if (!id || !confirm("Delete this EPG source?")) return;
+    if (!id || !confirm("Delete this EPG Source?")) return;
     try {
       await api(`/api/epg/sources/${id}`, { method: "DELETE" });
       applyEPGDeletes([id]);
-      toast.success("EPG source deleted");
+      toast.success("EPG Source deleted");
     } catch (err) { toast.error("Delete failed", err.message); }
   });
   document.getElementById("btn-refresh-epg").addEventListener("click", async () => {
     await api("/api/epg/refresh", { method: "POST", body: "{}" });
-    toast.info("Refreshing all EPG sources…");
+    toast.info("Refreshing all EPG Sources…");
     try { setEPGStatusHTML(await api("/api/epg/status")); } catch { /* ignore */ }
     setTimeout(() => { loadEPG({ withStatus: true }).catch(() => {}); }, 2000);
   });

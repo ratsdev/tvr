@@ -209,12 +209,7 @@ func scanGuideChannels(path, q string) ([]GuideChannel, error) {
 		})
 	}
 	sort.SliceStable(scanned, func(i, j int) bool {
-		ai := guideSortKey(scanned[i].DisplayName, scanned[i].ID)
-		aj := guideSortKey(scanned[j].DisplayName, scanned[j].ID)
-		if cmp := utils.NaturalCompare(ai, aj); cmp != 0 {
-			return cmp < 0
-		}
-		return utils.NaturalLess(scanned[i].ID, scanned[j].ID)
+		return guideChannelLess(scanned[i].DisplayName, scanned[i].ID, scanned[j].DisplayName, scanned[j].ID)
 	})
 	out := make([]GuideChannel, 0, len(scanned))
 	for _, ch := range scanned {
@@ -379,4 +374,20 @@ func guideSortKey(name, id string) string {
 		return id
 	}
 	return name
+}
+
+func guideChannelLess(nameA, idA, nameB, idB string) bool {
+	ai := guideSortKey(nameA, idA)
+	aj := guideSortKey(nameB, idB)
+	if cmp := utils.NaturalCompare(ai, aj); cmp != 0 {
+		return cmp < 0
+	}
+	return utils.NaturalLess(idA, idB)
+}
+
+func channelSortName(ch ChannelInfo) string {
+	if len(ch.DisplayNames) > 0 {
+		return ch.DisplayNames[0]
+	}
+	return ""
 }

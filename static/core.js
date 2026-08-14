@@ -35,7 +35,6 @@ const state = {
     channel: { baseline: null },
     epg: { baseline: null },
     relayMeta: { baseline: null },
-    relayEpg: { baseline: null },
   },
   viewer: {
     sourceId: null,
@@ -129,19 +128,8 @@ function readRelayMetaDraft() {
   };
 }
 
-function readRelayEpgDraft() {
-  return [...document.querySelectorAll("#relay-epg-checks input[data-epg-id]")]
-    .filter((el) => el.checked)
-    .map((el) => Number(el.dataset.epgId))
-    .sort((a, b) => a - b);
-}
-
 function isRelayMetaDirty() {
   return isDomainDirty(state.editors.relayMeta.baseline, readRelayMetaDraft());
-}
-
-function isRelayEpgDirty() {
-  return isDomainDirty(state.editors.relayEpg.baseline, readRelayEpgDraft());
 }
 
 function fillRelayMetaFields(detail) {
@@ -179,19 +167,10 @@ function applyRelayEditor(detail, { clearMemberSelection = false, forceFill = fa
   })) {
     fillRelayMetaFields(detail);
   }
-  if (shouldFillEditor({
-    activeEntityId: state.selectedRelayId,
-    responseEntityId: detail.id,
-    domainDirty: isRelayEpgDirty(),
-    force: forceFill,
-  })) {
-    renderRelayEPGChecks();
-    state.editors.relayEpg.baseline = readRelayEpgDraft();
-  }
   renderLineup();
 }
 
-/** Apply lineup/detail payload without refilling relay meta/EPG form fields. */
+/** Apply lineup/detail payload without refilling relay meta fields. */
 function applyRelayLineup(detail) {
   if (!state.currentRelay || state.currentRelay.id !== detail.id) {
     state.currentRelay = detail;
@@ -202,7 +181,6 @@ function applyRelayLineup(detail) {
       slug: detail.slug,
       groups: detail.groups,
       memberships: detail.memberships,
-      epg_source_ids: detail.epg_source_ids,
     };
   }
   state.selectedRelayId = detail.id;

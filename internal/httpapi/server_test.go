@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -94,7 +95,7 @@ func TestRelayPlaylistAndStream(t *testing.T) {
 	defer pres.Body.Close()
 	playlist, _ := io.ReadAll(pres.Body)
 	text := string(playlist)
-	if !strings.Contains(text, `tvg-id="live.id"`) || !strings.Contains(text, "/stream/"+ch.ID) {
+	if strings.Contains(text, `tvg-id=`) || !strings.Contains(text, "/stream/"+ch.ID) {
 		t.Fatalf("playlist=%s", text)
 	}
 
@@ -115,6 +116,42 @@ func TestRelayPlaylistAndStream(t *testing.T) {
 	}
 	if buf[0] != 0x47 {
 		t.Fatal("expected mpeg-ts")
+	}
+}
+
+func TestRelayPlaylistPublicTvgID(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Live", UpstreamURL: "http://example.com/live.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayRow, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "pub-tvg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relayRow.ID)
+	id := src.ID
+	if _, err := st.AddMembership(ctx, relayRow.ID, store.MembershipInput{
+		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 5, EPGSourceID: &id, TvgID: "live.id",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pres, err := http.Get(srv.URL + "/r/pub-tvg/playlist.m3u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pres.Body.Close()
+	playlist, _ := io.ReadAll(pres.Body)
+	text := string(playlist)
+	want := fmt.Sprintf(`tvg-id="epg%d-live.id"`, src.ID)
+	if !strings.Contains(text, want) || strings.Contains(text, `tvg-id="live.id"`) {
+		t.Fatalf("playlist=%s want %s", text, want)
 	}
 }
 
@@ -158,12 +195,15 @@ https://example.com/b.ts
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(full.EPGSourceIDs) != 1 {
-		t.Fatalf("epg sources=%v", full.EPGSourceIDs)
-	}
+	var sole *int64
 	for _, m := range full.Memberships {
-		if m.EPGSourceID == nil || *m.EPGSourceID != full.EPGSourceIDs[0] {
+		if m.EPGSourceID == nil {
 			t.Fatalf("membership missing sole EPG source: %+v", m)
+		}
+		if sole == nil {
+			sole = m.EPGSourceID
+		} else if *m.EPGSourceID != *sole {
+			t.Fatalf("memberships should share sole EPG source: %+v", m)
 		}
 		if m.TvgID == "" {
 			t.Fatalf("membership missing tvg-id: %+v", m)
@@ -223,18 +263,13 @@ http://example.com/c.ts
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.UnmatchedTvgIDs) != 2 {
-		t.Fatalf("unmatched=%v body=%s", out.UnmatchedTvgIDs, raw)
+	if len(out.UnmatchedTvgIDs) != 0 {
+		t.Fatalf("uncached import must not mark unmatched: unmatched=%v body=%s", out.UnmatchedTvgIDs, raw)
 	}
-	wantWarn := false
 	for _, w := range out.Warnings {
 		if w == "some tvg-id mappings need review after EPG refresh" {
-			wantWarn = true
-			break
+			t.Fatalf("unexpected review warning: %v", out.Warnings)
 		}
-	}
-	if !wantWarn {
-		t.Fatalf("missing review warning: %v", out.Warnings)
 	}
 	relay, err := st.GetRelayBySlug(context.Background(), "multi")
 	if err != nil {
@@ -244,13 +279,104 @@ http://example.com/c.ts
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(detail.EPGSourceIDs) != 2 {
-		t.Fatalf("epg sources=%v", detail.EPGSourceIDs)
+	if _, err := st.FindEPGSourceByURL(context.Background(), "https://epg.example.com/a.xml"); err != nil {
+		t.Fatalf("missing imported source a: %v", err)
+	}
+	if _, err := st.FindEPGSourceByURL(context.Background(), "https://epg.example.com/b.xml"); err != nil {
+		t.Fatalf("missing imported source b: %v", err)
 	}
 	for _, m := range detail.Memberships {
 		if m.EPGSourceID != nil {
 			t.Fatalf("uncached multi-source membership must leave EPG unset: %+v", m)
 		}
+	}
+}
+
+func seedCachedEPG(t *testing.T, st *store.Store, epgSvc *epg.Service, name, xml string) store.EPGSource {
+	t.Helper()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(xml))
+	}))
+	t.Cleanup(up.Close)
+	src, err := st.CreateEPGSource(context.Background(), store.EPGSourceInput{
+		Name: name, URL: up.URL, RefreshInterval: "1h",
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := epgSvc.RefreshSource(context.Background(), src.ID); err != nil {
+		t.Fatal(err)
+	}
+	return src
+}
+
+func TestImportRelayMatchesCachedTvgID(t *testing.T) {
+	srv, st, epgSvc := newTestServer(t)
+	xml := `<?xml version="1.0"?><tv><channel id="a.id"><display-name>A</display-name></channel></tv>`
+	src := seedCachedEPG(t, st, epgSvc, "Guide", xml)
+	playlist := fmt.Sprintf(`#EXTM3U url-tvg="%s"
+#EXTINF:-1 tvg-id="a.id" group-title="News",Alpha
+http://example.com/a.ts
+`, src.URL)
+	body, _ := json.Marshal(map[string]any{
+		"content": playlist, "relay_name": "Cached", "relay_slug": "cached", "import_epg": true,
+	})
+	res, err := http.Post(srv.URL+"/api/relays/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	var out struct {
+		UnmatchedTvgIDs []string `json:"unmatched_tvg_ids"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if len(out.UnmatchedTvgIDs) != 0 {
+		t.Fatalf("unmatched=%v body=%s", out.UnmatchedTvgIDs, raw)
+	}
+	relay, err := st.GetRelayBySlug(context.Background(), "cached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := st.GetRelayDetail(context.Background(), relay.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Memberships) != 1 || detail.Memberships[0].EPGSourceID == nil || *detail.Memberships[0].EPGSourceID != src.ID {
+		t.Fatalf("expected explicit cached match: %+v", detail.Memberships)
+	}
+}
+
+func TestImportRelayUnmatchedWhenCached(t *testing.T) {
+	srv, st, epgSvc := newTestServer(t)
+	xml := `<?xml version="1.0"?><tv><channel id="a.id"><display-name>A</display-name></channel></tv>`
+	src := seedCachedEPG(t, st, epgSvc, "Guide", xml)
+	playlist := fmt.Sprintf(`#EXTM3U url-tvg="%s"
+#EXTINF:-1 tvg-id="missing.id" group-title="News",Alpha
+http://example.com/a.ts
+`, src.URL)
+	body, _ := json.Marshal(map[string]any{
+		"content": playlist, "relay_name": "Miss", "relay_slug": "miss", "import_epg": true,
+	})
+	res, err := http.Post(srv.URL+"/api/relays/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	var out struct {
+		UnmatchedTvgIDs []string `json:"unmatched_tvg_ids"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if len(out.UnmatchedTvgIDs) != 1 || out.UnmatchedTvgIDs[0] != "missing.id" {
+		t.Fatalf("unmatched=%v body=%s", out.UnmatchedTvgIDs, raw)
 	}
 }
 

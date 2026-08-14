@@ -51,13 +51,9 @@ SELECT id, name, slug, created_at, updated_at FROM relays WHERE slug = ?`, norma
 	return r, err
 }
 
-// GetRelayDetail returns relay + groups + memberships + epg bindings.
+// GetRelayDetail returns relay + groups + memberships.
 func (s *Store) GetRelayDetail(ctx context.Context, id int64) (RelayDetail, error) {
 	relay, err := s.GetRelay(ctx, id)
-	if err != nil {
-		return RelayDetail{}, err
-	}
-	epgIDs, err := s.ListRelayEPGSourceIDs(ctx, id)
 	if err != nil {
 		return RelayDetail{}, err
 	}
@@ -70,10 +66,9 @@ func (s *Store) GetRelayDetail(ctx context.Context, id int64) (RelayDetail, erro
 		return RelayDetail{}, err
 	}
 	return RelayDetail{
-		Relay:        relay,
-		EPGSourceIDs: epgIDs,
-		Groups:       groups,
-		Memberships:  memberships,
+		Relay:       relay,
+		Groups:      groups,
+		Memberships: memberships,
 	}, nil
 }
 
@@ -159,102 +154,6 @@ func (s *Store) DeleteRelay(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
-}
-
-// ListRelayEPGSourceIDs returns EPG source IDs bound to a relay.
-func (s *Store) ListRelayEPGSourceIDs(ctx context.Context, relayID int64) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT epg_source_id FROM relay_epg_sources WHERE relay_id = ? ORDER BY epg_source_id`, relayID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	if out == nil {
-		out = []int64{}
-	}
-	return out, rows.Err()
-}
-
-// SetRelayEPGSources replaces the EPG bindings for a relay.
-func (s *Store) SetRelayEPGSources(ctx context.Context, relayID int64, sourceIDs []int64) error {
-	if _, err := s.GetRelay(ctx, relayID); err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	seen := map[int64]struct{}{}
-	clean := make([]int64, 0, len(sourceIDs))
-	for _, id := range sourceIDs {
-		if id <= 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		var exists int
-		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM epg_sources WHERE id = ?`, id).Scan(&exists); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: epg source %d not found", ErrValidation, id)
-			}
-			return err
-		}
-		clean = append(clean, id)
-	}
-
-	// Memberships may only reference selected sources.
-	rows, err := tx.QueryContext(ctx, `
-SELECT DISTINCT epg_source_id FROM relay_memberships
-WHERE relay_id = ? AND epg_source_id IS NOT NULL`, relayID)
-	if err != nil {
-		return err
-	}
-	var used []int64
-	for rows.Next() {
-		var id sql.NullInt64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		if id.Valid {
-			used = append(used, id.Int64)
-		}
-	}
-	rows.Close()
-	allowed := map[int64]struct{}{}
-	for _, id := range clean {
-		allowed[id] = struct{}{}
-	}
-	for _, id := range used {
-		if _, ok := allowed[id]; !ok {
-			return fmt.Errorf("%w: cannot remove epg source %d while memberships use it", ErrValidation, id)
-		}
-	}
-
-	if _, err := tx.ExecContext(ctx, `DELETE FROM relay_epg_sources WHERE relay_id = ?`, relayID); err != nil {
-		return err
-	}
-	for _, id := range clean {
-		if _, err := tx.ExecContext(ctx, `
-INSERT INTO relay_epg_sources (relay_id, epg_source_id) VALUES (?, ?)`, relayID, id); err != nil {
-			return err
-		}
-	}
-	_, _ = tx.ExecContext(ctx, `UPDATE relays SET updated_at = ? WHERE id = ?`,
-		time.Now().UTC().Format(time.RFC3339Nano), relayID)
-	return tx.Commit()
 }
 
 // ListRelayGroups returns ordered groups for a relay.
@@ -455,32 +354,6 @@ WHERE m.id = ?`, id)
 	return m, err
 }
 
-func validateRelayTvgUniquenessQ(ctx context.Context, q querier, relayID int64) error {
-	rows, err := q.QueryContext(ctx, `
-SELECT tvg_id, COUNT(DISTINCT epg_source_id)
-FROM relay_memberships
-WHERE relay_id = ? AND tvg_id <> '' AND epg_source_id IS NOT NULL
-GROUP BY tvg_id
-HAVING COUNT(DISTINCT epg_source_id) > 1`, relayID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var conflicts []string
-	for rows.Next() {
-		var tvg string
-		var n int
-		if err := rows.Scan(&tvg, &n); err != nil {
-			return err
-		}
-		conflicts = append(conflicts, tvg)
-	}
-	if len(conflicts) > 0 {
-		return fmt.Errorf("%w: duplicate tvg-id across EPG sources: %s", ErrValidation, strings.Join(conflicts, ", "))
-	}
-	return nil
-}
-
 func validateMembershipInputQ(ctx context.Context, q querier, relayID int64, in MembershipInput) error {
 	if strings.TrimSpace(in.ChannelID) == "" {
 		return fmt.Errorf("%w: channel_id is required", ErrValidation)
@@ -506,11 +379,13 @@ func validateMembershipInputQ(ctx context.Context, q querier, relayID int64, in 
 		return err
 	}
 	if in.EPGSourceID != nil {
-		var bound int
-		err := q.QueryRowContext(ctx, `
-SELECT 1 FROM relay_epg_sources WHERE relay_id = ? AND epg_source_id = ?`, relayID, *in.EPGSourceID).Scan(&bound)
+		if *in.EPGSourceID <= 0 {
+			return fmt.Errorf("%w: epg_source_id is invalid", ErrValidation)
+		}
+		var exists int
+		err := q.QueryRowContext(ctx, `SELECT 1 FROM epg_sources WHERE id = ?`, *in.EPGSourceID).Scan(&exists)
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: epg_source_id is not selected for this relay", ErrValidation)
+			return fmt.Errorf("%w: epg source not found", ErrValidation)
 		}
 		if err != nil {
 			return err
@@ -549,9 +424,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	if err := renumberRelayMemberships(ctx, tx, relayID); err != nil {
 		return RelayMembership{}, err
 	}
-	if err := validateRelayTvgUniquenessQ(ctx, tx, relayID); err != nil {
-		return RelayMembership{}, err
-	}
 	return getMembershipQ(ctx, tx, id)
 }
 
@@ -585,9 +457,6 @@ WHERE id = ?`,
 		return RelayMembership{}, err
 	}
 	if err := renumberRelayMemberships(ctx, tx, existing.RelayID); err != nil {
-		return RelayMembership{}, err
-	}
-	if err := validateRelayTvgUniquenessQ(ctx, tx, existing.RelayID); err != nil {
 		return RelayMembership{}, err
 	}
 	return getMembershipQ(ctx, tx, membershipID)

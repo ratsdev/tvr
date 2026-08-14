@@ -107,7 +107,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/relays/{id}", s.handleGetRelay)
 	s.mux.HandleFunc("PUT /api/relays/{id}", s.handleUpdateRelay)
 	s.mux.HandleFunc("DELETE /api/relays/{id}", s.handleDeleteRelay)
-	s.mux.HandleFunc("PUT /api/relays/{id}/epg-sources", s.handleSetRelayEPGSources)
 	s.mux.HandleFunc("PUT /api/relays/{id}/layout", s.handleReplaceRelayLayout)
 	s.mux.HandleFunc("POST /api/relays/{id}/groups", s.handleCreateRelayGroup)
 	s.mux.HandleFunc("PUT /api/relays/{id}/groups/{groupId}", s.handleUpdateRelayGroup)
