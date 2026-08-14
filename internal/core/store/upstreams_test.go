@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/store"
 	_ "modernc.org/sqlite"
 )
 

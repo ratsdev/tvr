@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 func TestParseXMLTVTime(t *testing.T) {

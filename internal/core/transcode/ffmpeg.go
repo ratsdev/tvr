@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 const defaultUserAgent = "tvr/1.0"

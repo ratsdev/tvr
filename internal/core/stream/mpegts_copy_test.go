@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/core/mpegts"
-	"github.com/jqjiang/tvr/internal/core/transcode"
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/mpegts"
+	"github.com/ratsdev/tvr/internal/core/transcode"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 	"time"
 )
 

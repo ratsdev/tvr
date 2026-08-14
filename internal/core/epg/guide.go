@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 // Sentinel errors for guide queries.

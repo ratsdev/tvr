@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 func TestBuildArgsOrderAndScale(t *testing.T) {

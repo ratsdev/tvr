@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jqjiang/tvr/internal/core/mpegts"
+	"github.com/ratsdev/tvr/internal/core/mpegts"
 )
 
 func (s *session) copyMPEGTS(ctx context.Context, body io.Reader, opts mpegTSCopyOptions) error {

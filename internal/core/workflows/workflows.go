@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 // Workflows owns store mutations that enqueue derived EPG work.

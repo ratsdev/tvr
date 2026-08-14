@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 func (s *session) run() {

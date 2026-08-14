@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/transcode"
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/transcode"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 type viewer struct {

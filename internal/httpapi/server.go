@@ -15,11 +15,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/jqjiang/tvr/internal/config"
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/core/stream"
-	"github.com/jqjiang/tvr/internal/core/workflows"
+	"github.com/ratsdev/tvr/internal/config"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/stream"
+	"github.com/ratsdev/tvr/internal/core/workflows"
 )
 
 // channelStreamCleanupTimeout bounds waiting for active live sessions after

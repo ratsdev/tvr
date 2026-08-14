@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 func TestNaturalCompareLatinFirst(t *testing.T) {

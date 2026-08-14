@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/transcode"
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/transcode"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 const (

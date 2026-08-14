@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/stream"
-	"github.com/jqjiang/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/internal/core/stream"
+	"github.com/ratsdev/tvr/internal/core/upstream"
 )
 
 func liveMPEGTSServer(t *testing.T, pkt []byte) *httptest.Server {

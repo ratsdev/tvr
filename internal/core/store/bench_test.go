@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 func BenchmarkListChannels1000(b *testing.B) {

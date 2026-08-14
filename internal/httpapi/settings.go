@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/core/transcode"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/transcode"
 )
 
 type settingsResponse struct {

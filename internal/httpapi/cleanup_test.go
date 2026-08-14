@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/config"
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/core/stream"
-	"github.com/jqjiang/tvr/internal/core/transcode"
-	"github.com/jqjiang/tvr/internal/core/upstream"
-	"github.com/jqjiang/tvr/static"
+	"github.com/ratsdev/tvr/internal/config"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/stream"
+	"github.com/ratsdev/tvr/internal/core/transcode"
+	"github.com/ratsdev/tvr/internal/core/upstream"
+	"github.com/ratsdev/tvr/static"
 )
 
 func TestUpdateChannelCleanupTimeout(t *testing.T) {

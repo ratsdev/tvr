@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 func (s *Server) handleListRelays(w http.ResponseWriter, r *http.Request) {

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/epg"
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/core/workflows"
+	"github.com/ratsdev/tvr/internal/core/epg"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/workflows"
 )
 
 func TestUpdateEPGSourceEnableQueuesRefresh(t *testing.T) {

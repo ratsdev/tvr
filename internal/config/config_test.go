@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/config"
+	"github.com/ratsdev/tvr/internal/config"
 )
 
 func TestLoadDefaults(t *testing.T) {

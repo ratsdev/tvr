@@ -1,4 +1,4 @@
-module github.com/jqjiang/tvr
+module github.com/ratsdev/tvr
 
 go 1.26.1
 

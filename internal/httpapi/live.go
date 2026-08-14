@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/mpegts"
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/core/stream"
+	"github.com/ratsdev/tvr/internal/core/mpegts"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/stream"
 )
 
 func (s *Server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {

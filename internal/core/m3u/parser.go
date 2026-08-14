@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 // Playlist is a parsed M3U/M3U8 extended playlist.

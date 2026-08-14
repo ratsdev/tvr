@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 var (

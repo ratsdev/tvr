@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 // ErrAdmissionClosed is returned when the EPG worker no longer accepts work.

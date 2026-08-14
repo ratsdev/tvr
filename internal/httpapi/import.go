@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/m3u"
-	"github.com/jqjiang/tvr/internal/core/store"
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/core/m3u"
+	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 type importRelayRequest struct {

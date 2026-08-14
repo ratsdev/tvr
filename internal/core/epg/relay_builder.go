@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 func (s *Service) writeRelayCache(slug string, doc *tvDocument) error {

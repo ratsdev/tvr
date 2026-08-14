@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jqjiang/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/store"
 )
 
 // ChannelInfo is a searchable XMLTV channel from a source index.

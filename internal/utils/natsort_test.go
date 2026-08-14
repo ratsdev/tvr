@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jqjiang/tvr/internal/utils"
+	"github.com/ratsdev/tvr/internal/utils"
 )
 
 func TestCompareCorpus(t *testing.T) {
