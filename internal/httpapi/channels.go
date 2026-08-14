@@ -11,6 +11,7 @@ import (
 
 	"github.com/ratsdev/tvr/internal/core/mpegts"
 	"github.com/ratsdev/tvr/internal/core/store"
+	"github.com/ratsdev/tvr/internal/core/workflows"
 )
 
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +76,14 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err)
 		return
+	}
+	if store.ChannelEPGKey(before) != store.ChannelEPGKey(ch) {
+		ids, err := s.store.ChannelRelayIDs(r.Context(), ch.ID)
+		if err != nil {
+			s.logger.Error("channel epg owners", "channel_id", ch.ID, "err", err)
+		} else {
+			_ = s.workflows.ApplyDerivedWork(r.Context(), workflows.DerivedWork{RebuildRelays: ids})
+		}
 	}
 	invalidate := store.ChannelRelayInvalidate(before, ch)
 	// Detach cleanup from the client request so abort/navigation cannot

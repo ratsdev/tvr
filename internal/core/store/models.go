@@ -67,6 +67,8 @@ type Channel struct {
 	FixedUpstreamID  string            `json:"fixed_upstream_id,omitempty"`
 	Headers          map[string]string `json:"headers"`
 	TranscodeEnabled bool              `json:"transcode_enabled"`
+	EPGSourceID      *int64            `json:"epg_source_id,omitempty"`
+	TvgID            string            `json:"tvg_id"`
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
 	RelayCount       int               `json:"relay_count"`
@@ -83,6 +85,8 @@ type ChannelInput struct {
 	FixedUpstreamID  string            `json:"fixed_upstream_id"`
 	Headers          map[string]string `json:"headers"`
 	TranscodeEnabled *bool             `json:"transcode_enabled,omitempty"`
+	EPGSourceID      *int64            `json:"epg_source_id"`
+	TvgID            *string           `json:"tvg_id"`
 }
 
 // TranscodeSettings is the singleton editable transcoder profile.
@@ -169,12 +173,10 @@ type RelayMembership struct {
 
 // MembershipInput creates or updates a membership.
 type MembershipInput struct {
-	ChannelID   string `json:"channel_id"`
-	GroupID     int64  `json:"group_id"`
-	Number      int    `json:"number"`
-	EPGSourceID *int64 `json:"epg_source_id"`
-	TvgID       string `json:"tvg_id"`
-	SortOrder   *int   `json:"sort_order"`
+	ChannelID string `json:"channel_id"`
+	GroupID   int64  `json:"group_id"`
+	Number    int    `json:"number"`
+	SortOrder *int   `json:"sort_order"`
 }
 
 // RelayDetail is a full relay editor payload.

@@ -43,6 +43,7 @@ type ImportRelayResult struct {
 	GroupsCreated      int
 	EPGImported        int
 	EPGSourceIDs       []int64
+	UpdatedIDs         []string
 }
 
 // ImportChannelEntry is one preclassified TXT row ready for persistence.
@@ -158,17 +159,25 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 		if err != nil {
 			return err
 		}
+		updated := map[string]struct{}{}
 
 		for _, ent := range in.Entries {
+			srcID, tvg := resolveImportChannelEPG(ent, epgIDs)
 			ch, err := findChannelByUpstreamURLTx(ctx, tx, ent.UpstreamURL)
 			if errors.Is(err, ErrNotFound) {
 				name := nextUniqueChannelName(takenNames, ent.Name)
-				ch, err = createChannelTx(ctx, tx, ChannelInput{
+				in := ChannelInput{
 					Name:        name,
 					LogoURL:     ent.LogoURL,
 					UpstreamURL: ent.UpstreamURL,
 					Headers:     ent.Headers,
-				})
+				}
+				if srcID != nil && tvg != "" {
+					t := tvg
+					in.EPGSourceID = srcID
+					in.TvgID = &t
+				}
+				ch, err = createChannelTx(ctx, tx, in)
 				if err != nil {
 					return err
 				}
@@ -177,6 +186,12 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 				return err
 			} else {
 				result.ChannelsReused++
+				if ChannelEPGKey(ch) == "" && srcID != nil && tvg != "" {
+					if err := fillChannelEPGTx(ctx, tx, ch.ID, *srcID, tvg); err != nil {
+						return err
+					}
+					updated[ch.ID] = struct{}{}
+				}
 			}
 
 			g, err := ensureGroup(ent.GroupTitle)
@@ -185,17 +200,19 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 			}
 			ord := g.ord
 			if _, err := addMembershipTx(ctx, tx, relayID, MembershipInput{
-				ChannelID:   ch.ID,
-				GroupID:     g.id,
-				EPGSourceID: resolveImportMembershipEPG(ent, epgIDs),
-				TvgID:       ent.TvgID,
-				SortOrder:   &ord,
+				ChannelID: ch.ID,
+				GroupID:   g.id,
+				SortOrder: &ord,
 			}); err != nil {
 				return err
 			}
 			g.ord++
 			result.MembershipsCreated++
 		}
+		for id := range updated {
+			result.UpdatedIDs = append(result.UpdatedIDs, id)
+		}
+		sort.Strings(result.UpdatedIDs)
 
 		if result.GroupsCreated == 0 {
 			if _, err := ensureGroup("Channels"); err != nil {
@@ -207,25 +224,33 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 	return result, err
 }
 
-// resolveImportMembershipEPG chooses the EPG source for an imported membership.
+// resolveImportChannelEPG chooses a complete channel EPG pair for an import entry.
 //
 // Requires both playlist EPG URL(s) and a per-entry tvg-id. Then:
 //  1. Prefer an explicit source already selected for this entry (multi-url-tvg match)
 //     when it belongs to this playlist's EPG set.
 //  2. If the playlist has exactly one EPG source, bind that source.
-//  3. Otherwise leave unset.
-func resolveImportMembershipEPG(ent ImportRelayEntry, epgIDs []int64) *int64 {
-	if strings.TrimSpace(ent.TvgID) == "" || len(epgIDs) == 0 {
-		return nil
+//  3. Otherwise leave unset (both empty — never a half-pair).
+func resolveImportChannelEPG(ent ImportRelayEntry, epgIDs []int64) (*int64, string) {
+	tvg := strings.TrimSpace(ent.TvgID)
+	if tvg == "" || len(epgIDs) == 0 {
+		return nil, ""
 	}
 	if ent.EPGSourceID != nil && containsInt64(epgIDs, *ent.EPGSourceID) {
-		return ent.EPGSourceID
+		return ent.EPGSourceID, tvg
 	}
 	if len(epgIDs) == 1 {
 		id := epgIDs[0]
-		return &id
+		return &id, tvg
 	}
-	return nil
+	return nil, ""
+}
+
+func fillChannelEPGTx(ctx context.Context, q querier, channelID string, sourceID int64, tvg string) error {
+	_, err := q.ExecContext(ctx, `
+UPDATE channels SET epg_source_id = ?, tvg_id = ?, updated_at = ? WHERE id = ?`,
+		sourceID, tvg, time.Now().UTC().Format(time.RFC3339Nano), channelID)
+	return err
 }
 
 func containsInt64(ids []int64, want int64) bool {
@@ -293,7 +318,7 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 
 func findChannelByNameTx(ctx context.Context, q querier, name string) (Channel, error) {
 	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
 FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -341,7 +366,7 @@ VALUES (?, ?, ?, ?, ?, NULL)`,
 func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
 FROM channels c
 WHERE c.upstream_url = ?
    OR EXISTS (SELECT 1 FROM channel_upstreams u WHERE u.channel_id = c.id AND u.url = ? AND u.proxy_id IS NULL)
@@ -369,10 +394,17 @@ func createChannelTx(ctx context.Context, q querier, in ChannelInput) (Channel, 
 		return Channel{}, err
 	}
 	transcode := resolveTranscodeEnabled(in.TranscodeEnabled, false)
+	epgID, tvgID, err := resolveChannelEPG(in, nil)
+	if err != nil {
+		return Channel{}, err
+	}
+	if err := ensureEPGSourceExists(ctx, q, epgID); err != nil {
+		return Channel{}, err
+	}
 	id := uuid.NewString()
 	_, err = q.ExecContext(ctx, `
-INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, transcode_enabled, upstream_policy, fixed_upstream_id, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, transcode_enabled, upstream_policy, fixed_upstream_id, epg_source_id, tvg_id, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		strings.TrimSpace(in.Name),
 		strings.TrimSpace(in.LogoURL),
@@ -381,6 +413,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		boolToInt(transcode),
 		spec.policy,
 		spec.fixedID,
+		nullableInt64(epgID),
+		tvgID,
 		now.Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
 	)
@@ -391,7 +425,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		return Channel{}, err
 	}
 	row := q.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
 FROM channels c WHERE c.id = ?`, id)
 	return scanChannel(row)
 }

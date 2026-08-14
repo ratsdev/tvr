@@ -42,13 +42,14 @@ func TestIncompleteRebuildPreservesRelayXML(t *testing.T) {
 
 	srcA, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "A", URL: upA.URL, RefreshInterval: "1h"}, time.Hour)
 	srcB, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "B", URL: upB.URL, RefreshInterval: "1h"}, time.Hour)
-	chA, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
-	chB, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
+	idA, idB := srcA.ID, srcB.ID
+	tvgA, tvgB := "a.id", "b.id"
+	chA, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &idA, TvgID: &tvgA})
+	chB, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts", EPGSourceID: &idB, TvgID: &tvgB})
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
-	idA, idB := srcA.ID, srcB.ID
-	_, _ = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chA.ID, GroupID: groups[0].ID, EPGSourceID: &idA, TvgID: "a.id"})
-	_, _ = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chB.ID, GroupID: groups[0].ID, EPGSourceID: &idB, TvgID: "b.id"})
+	_, _ = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chA.ID, GroupID: groups[0].ID})
+	_, _ = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chB.ID, GroupID: groups[0].ID})
 
 	dir := t.TempDir()
 	svc := epg.New(st, dir, 1<<20, nil)
@@ -123,11 +124,12 @@ func TestRelayCleanupMultiSlugAndOwnership(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	src, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: upstream.URL, RefreshInterval: "1h"}, time.Hour)
-	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
+	id := src.ID
+	tvg := "a.id"
+	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &id, TvgID: &tvg})
 	relayA, _ := st.CreateRelay(ctx, store.RelayInput{Name: "A", Slug: "slug-a"})
 	groups, _ := st.ListRelayGroups(ctx, relayA.ID)
-	id := src.ID
-	_, _ = st.AddMembership(ctx, relayA.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &id, TvgID: "a.id"})
+	_, _ = st.AddMembership(ctx, relayA.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID})
 
 	dir := t.TempDir()
 	svc := epg.New(st, dir, 1<<20, nil)
@@ -165,10 +167,10 @@ func TestRelayCleanupMultiSlugAndOwnership(t *testing.T) {
 	}
 
 	// Reuse old slug on another relay — cleanup must not delete the new owner's file.
-	ch2, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
+	ch2, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts", EPGSourceID: &id, TvgID: &tvg})
 	relayB, _ := st.CreateRelay(ctx, store.RelayInput{Name: "B", Slug: "slug-a"})
 	groupsB, _ := st.ListRelayGroups(ctx, relayB.ID)
-	_, _ = st.AddMembership(ctx, relayB.ID, store.MembershipInput{ChannelID: ch2.ID, GroupID: groupsB[0].ID, EPGSourceID: &id, TvgID: "a.id"})
+	_, _ = st.AddMembership(ctx, relayB.ID, store.MembershipInput{ChannelID: ch2.ID, GroupID: groupsB[0].ID})
 	_ = svc.EnqueueRebuildRelays([]int64{relayB.ID})
 	if err := svc.DrainPending(ctx); err != nil {
 		t.Fatal(err)

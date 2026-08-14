@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -186,14 +185,6 @@ func (w *Workflows) DeleteRelay(ctx context.Context, id int64) error {
 	})
 }
 
-func mappingKey(epgID *int64, tvgID string) string {
-	tvgID = strings.TrimSpace(tvgID)
-	if epgID == nil || tvgID == "" {
-		return ""
-	}
-	return fmt.Sprintf("%d\x00%s", *epgID, tvgID)
-}
-
 func (w *Workflows) AddMembership(ctx context.Context, relayID int64, in store.MembershipInput) (store.RelayMembership, error) {
 	var m store.RelayMembership
 	err := w.withAdmission(func() error {
@@ -202,7 +193,7 @@ func (w *Workflows) AddMembership(ctx context.Context, relayID int64, in store.M
 		if err != nil {
 			return err
 		}
-		if mappingKey(m.EPGSourceID, m.TvgID) != "" {
+		if store.MappingKey(m.EPGSourceID, m.TvgID) != "" {
 			_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: []int64{relayID}})
 		}
 		return nil
@@ -221,7 +212,7 @@ func (w *Workflows) UpdateMembership(ctx context.Context, relayID, membershipID 
 		if err != nil {
 			return err
 		}
-		if mappingKey(before.EPGSourceID, before.TvgID) != mappingKey(m.EPGSourceID, m.TvgID) {
+		if store.MappingKey(before.EPGSourceID, before.TvgID) != store.MappingKey(m.EPGSourceID, m.TvgID) {
 			_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: []int64{relayID}})
 		}
 		return nil
@@ -238,7 +229,7 @@ func (w *Workflows) DeleteMembership(ctx context.Context, relayID, membershipID 
 		if err := w.Store.DeleteMembership(ctx, membershipID); err != nil {
 			return err
 		}
-		if mappingKey(before.EPGSourceID, before.TvgID) != "" {
+		if store.MappingKey(before.EPGSourceID, before.TvgID) != "" {
 			_ = w.ApplyDerivedWork(ctx, DerivedWork{RebuildRelays: []int64{relayID}})
 		}
 		return nil
@@ -254,12 +245,34 @@ func (w *Workflows) ImportRelay(ctx context.Context, in store.ImportRelayInput) 
 		if err != nil {
 			return err
 		}
+		ids := []int64{imported.RelayID}
+		for _, chID := range imported.UpdatedIDs {
+			owners, err := w.Store.ChannelRelayIDs(ctx, chID)
+			if err != nil {
+				w.logger().Warn("import channel owners", "channel_id", chID, "err", err)
+				continue
+			}
+			ids = append(ids, owners...)
+		}
 		work := DerivedWork{
-			RebuildRelays:  []int64{imported.RelayID},
+			RebuildRelays:  uniqueInt64(ids),
 			RefreshSources: append([]int64(nil), imported.EPGSourceIDs...),
 		}
 		_ = w.ApplyDerivedWork(ctx, work)
 		return nil
 	})
 	return imported, err
+}
+
+func uniqueInt64(ids []int64) []int64 {
+	seen := map[int64]struct{}{}
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }

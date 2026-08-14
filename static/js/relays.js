@@ -109,13 +109,14 @@ function renderLineup() {
         ${gm.map((m) => {
           const checked = state.selected.members.has(m.id) ? "checked" : "";
           const selected = checked ? "selected" : "";
-          const srcName = state.epgs.find((e) => e.id === m.epg_source_id)?.name;
+          const ch = state.channels.find((c) => c.id === m.channel_id);
+          const srcName = state.epgs.find((e) => e.id === ch?.epg_source_id)?.name;
           return `<div class="member ${selected}" draggable="true" data-member-id="${m.id}" data-group-id="${g.id}">
             <input type="checkbox" data-select-member="${m.id}" ${checked} />
             <span class="handle">⋮⋮</span>
             <div>
               <div class="member-title">#${esc(m.number)} · ${esc(m.channel_name)}</div>
-              <div class="sub">${esc(membershipEPGLine(srcName, m.tvg_id))}</div>
+              <div class="sub">${esc(membershipEPGLine(srcName, ch?.tvg_id))}</div>
             </div>
             <div class="row">
               <button type="button" class="small" data-copy-stream="${esc(m.channel_id)}" title="Copy Stream URL">Stream</button>
@@ -238,15 +239,11 @@ async function loadMemberTargets(relayId, member) {
   const detail = state.currentRelay?.id === relayId ? state.currentRelay : await api(`/api/relays/${relayId}`);
   if (!isCurrentGeneration(gen, state.gens.memberRelay)) return false;
   const groupSel = document.getElementById("member-group");
-  const epgSel = document.getElementById("member-epg-source");
   const groups = detail.groups || [];
   groupSel.innerHTML = groups.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`).join("")
     + `<option value="${MEMBER_NEW_GROUP}">(Create New Group)</option>`;
-  epgSel.innerHTML = `<option value="">(None)</option>` + state.epgs.map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
   groupSel.value = member?.group_id ?? groups[0]?.id ?? MEMBER_NEW_GROUP;
-  epgSel.value = member?.epg_source_id ?? "";
   showNewGroupField(groupSel.value === MEMBER_NEW_GROUP);
-  memberTvg.setEnabled(!!epgSel.value);
   return true;
 }
 
@@ -296,150 +293,8 @@ async function openMemberDialog(member, channelId) {
     toast.error("Failed to load relay", err.message);
     return;
   }
-  memberTvg.reset(member?.tvg_id || "");
   document.getElementById("member-dialog").showModal();
-  await memberTvg.resolveLabel(member?.tvg_id || "");
 }
-
-const memberTvg = (() => {
-  let searchTimer = 0;
-  let blurTimer = 0;
-  const el = (id) => document.getElementById(id);
-
-  function sourceID() { return el("member-epg-source").value; }
-  function selectedID() { return el("member-tvg-id").value; }
-
-  function query() {
-    const qEl = el("member-tvg-q");
-    const q = qEl.value.trim();
-    const committed = (qEl.dataset.label || "").trim();
-    return !q || q === committed ? "" : q;
-  }
-
-  function setEnabled(on) {
-    el("member-tvg-q").disabled = !on;
-  }
-
-  function hidePop() {
-    el("member-tvg-pop").classList.add("hidden");
-  }
-
-  function setSelection(id, label) {
-    id = id || "";
-    const text = id ? (label || id) : "";
-    el("member-tvg-id").value = id;
-    const qEl = el("member-tvg-q");
-    qEl.dataset.label = text;
-    qEl.value = text;
-    el("member-tvg-clear").classList.toggle("hidden", !id);
-  }
-
-  function commit() {
-    clearTimeout(blurTimer);
-    hidePop();
-    const qEl = el("member-tvg-q");
-    if (!qEl.value.trim()) setSelection("");
-    else qEl.value = qEl.dataset.label || "";
-  }
-
-  function reset(id) {
-    setSelection(id || "");
-    hidePop();
-  }
-
-  function renderResults(hits) {
-    const selected = selectedID();
-    el("member-tvg-results").innerHTML = (hits || []).map((h) => {
-      const id = String(h.id);
-      const label = epgChannelLabel(h);
-      const active = id === selected ? "active" : "";
-      return `<button type="button" class="${active}" data-tvg-id="${esc(id)}" data-tvg-label="${esc(label)}">${esc(label)}</button>`;
-    }).join("");
-  }
-
-  function fetchChannels(q) {
-    return api(`/api/epg/sources/${sourceID()}/channels?q=${encodeURIComponent(q)}&limit=50`);
-  }
-
-  async function resolveLabel(id) {
-    if (!sourceID() || !id) return;
-    const gen = ++state.gens.tvg;
-    try {
-      const res = await fetchChannels(id);
-      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
-      const exact = (res.channels || []).find((h) => h.id === id);
-      if (!exact || selectedID() !== id) return;
-      const qEl = el("member-tvg-q");
-      if (document.activeElement === qEl && query()) {
-        qEl.dataset.label = epgChannelLabel(exact);
-        return;
-      }
-      setSelection(id, epgChannelLabel(exact));
-    } catch { /* keep bare id */ }
-  }
-
-  async function search() {
-    const qEl = el("member-tvg-q");
-    const hintEl = el("member-tvg-hint");
-    const q = query();
-    if (!sourceID() || !q) {
-      hidePop();
-      hintEl.textContent = "";
-      renderResults([]);
-      return;
-    }
-    const gen = ++state.gens.tvg;
-    let hits = [];
-    let total = 0;
-    try {
-      const res = await fetchChannels(q);
-      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
-      hits = res.channels || [];
-      total = res.total || 0;
-    } catch {
-      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
-    }
-    hintEl.textContent = epgChannelHint(hits.length, total);
-    renderResults(hits);
-    if (document.activeElement === qEl) el("member-tvg-pop").classList.remove("hidden");
-    else hidePop();
-  }
-
-  function scheduleSearch() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(search, 200);
-  }
-
-  function flushSearch() {
-    clearTimeout(searchTimer);
-    search();
-  }
-
-  function cancel() {
-    el("member-tvg-q").value = el("member-tvg-q").dataset.label || "";
-    commit();
-  }
-
-  function scheduleCommit() {
-    clearTimeout(blurTimer);
-    blurTimer = setTimeout(commit, 120);
-  }
-
-  function pick(id, label) {
-    clearTimeout(blurTimer);
-    setSelection(id, label);
-    hidePop();
-  }
-
-  function clear() {
-    clearTimeout(blurTimer);
-    setSelection("");
-    hidePop();
-    el("member-tvg-q").focus();
-  }
-
-  return { setEnabled, reset, commit, resolveLabel, scheduleSearch, flushSearch, cancel, scheduleCommit, pick, clear };
-})();
 
 function wireRelays() {
   document.getElementById("relay-search").addEventListener("input", (e) => {
@@ -595,7 +450,6 @@ function wireRelays() {
     document.getElementById("member-save").click();
   });
   document.getElementById("member-relay").addEventListener("change", async () => {
-    memberTvg.reset("");
     document.getElementById("member-error").textContent = "";
     try {
       if (!await loadMemberTargets(Number(document.getElementById("member-relay").value), null)) return;
@@ -608,37 +462,13 @@ function wireRelays() {
     showNewGroupField(creating);
     if (creating) document.getElementById("member-new-group").focus();
   });
-  document.getElementById("member-tvg-q").addEventListener("input", () => memberTvg.scheduleSearch());
-  document.getElementById("member-tvg-q").addEventListener("focus", () => {
-    const qEl = document.getElementById("member-tvg-q");
-    if (qEl.dataset.label && qEl.value === qEl.dataset.label) qEl.select();
-  });
-  document.getElementById("member-tvg-q").addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      memberTvg.cancel();
-      return;
-    }
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    memberTvg.flushSearch();
-  });
-  document.getElementById("member-tvg-q").addEventListener("blur", () => memberTvg.scheduleCommit());
-  document.getElementById("member-tvg-pop").addEventListener("mousedown", (e) => e.preventDefault());
-  document.getElementById("member-tvg-results").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-tvg-id]");
-    if (btn) memberTvg.pick(btn.dataset.tvgId, btn.dataset.tvgLabel);
-  });
-  document.getElementById("member-tvg-clear").addEventListener("click", () => memberTvg.clear());
   document.getElementById("member-save").addEventListener("click", async (e) => {
     e.preventDefault();
-    memberTvg.commit();
     const errEl = document.getElementById("member-error");
     const saveBtn = document.getElementById("member-save");
     errEl.textContent = "";
     const relayId = Number(document.getElementById("member-relay").value);
     if (!relayId) { errEl.textContent = "Select a Relay"; return; }
-    const epgRaw = document.getElementById("member-epg-source").value;
     const channelId = document.getElementById("member-channel").value;
     if (!channelId) { errEl.textContent = "Select a Channel"; return; }
     const id = document.getElementById("member-id").value;
@@ -660,8 +490,6 @@ function wireRelays() {
       const body = {
         channel_id: channelId,
         group_id: groupId,
-        epg_source_id: epgRaw ? Number(epgRaw) : null,
-        tvg_id: document.getElementById("member-tvg-id").value,
       };
       if (id) await api(`/api/relays/${relayId}/memberships/${id}`, { method: "PUT", body: JSON.stringify(body) });
       else await api(`/api/relays/${relayId}/memberships`, { method: "POST", body: JSON.stringify(body) });
@@ -792,8 +620,4 @@ function wireRelays() {
     }
   });
 
-  document.getElementById("member-epg-source").addEventListener("change", () => {
-    memberTvg.setEnabled(!!document.getElementById("member-epg-source").value);
-    memberTvg.reset("");
-  });
 }

@@ -106,6 +106,20 @@
                   <input type="hidden" id="channel-id" />
                   <label>Name<input id="channel-name" required /></label>
                   <label>Logo URL<input id="channel-logo" placeholder="https://…" /></label>
+                  <label>EPG Source
+                    <select id="channel-epg-source"><option value="">(None)</option></select>
+                  </label>
+                  <label>EPG Channel
+                    <input type="hidden" id="channel-tvg-id" />
+                    <div class="epg-search">
+                      <input id="channel-tvg-q" placeholder="None" autocomplete="off" spellcheck="false" />
+                      <button type="button" id="channel-tvg-clear" class="epg-clear hidden" aria-label="Clear">×</button>
+                      <div id="channel-tvg-pop" class="epg-pop hidden">
+                        <div id="channel-tvg-results" class="epg-results"></div>
+                        <div id="channel-tvg-hint" class="epg-pop-hint muted"></div>
+                      </div>
+                    </div>
+                  </label>
                   <label>Policy
                     <select id="channel-policy">
                       <option value="fixed">Fixed</option>
@@ -478,20 +492,6 @@
       </label>
       <label id="member-new-group-wrap" class="hidden">New Group name
         <input id="member-new-group" placeholder="e.g. Sports" />
-      </label>
-      <label>EPG Source
-        <select id="member-epg-source"><option value="">(None)</option></select>
-      </label>
-      <label>EPG Channel
-        <input type="hidden" id="member-tvg-id" />
-        <div class="epg-search">
-          <input id="member-tvg-q" placeholder="None" autocomplete="off" spellcheck="false" />
-          <button type="button" id="member-tvg-clear" class="epg-clear hidden" aria-label="Clear">×</button>
-          <div id="member-tvg-pop" class="epg-pop hidden">
-            <div id="member-tvg-results" class="epg-results"></div>
-            <div id="member-tvg-hint" class="epg-pop-hint muted"></div>
-          </div>
-        </div>
       </label>
       <div class="actions">
         <button type="button" id="member-cancel">Cancel</button>

@@ -73,3 +73,94 @@ func TestUpdateRelaySlugQueuesRebuildAndCleanup(t *testing.T) {
 		t.Fatal("slug change should queue derived work")
 	}
 }
+
+func TestUpdateMembershipChannelSwapRebuilds(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	epgSvc := epg.New(st, t.TempDir(), 1<<20, nil)
+	wf := &workflows.Workflows{Store: st, EPG: epgSvc, DefaultEPGInterval: time.Hour}
+
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "a.id"
+	bound, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Bound", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Free", UpstreamURL: "http://example.com/b.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relay.ID)
+	m, err := wf.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: unbound.ID, GroupID: groups[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = epgSvc.DrainPending(ctx)
+
+	if _, err := wf.UpdateMembership(ctx, relay.ID, m.ID, store.MembershipInput{
+		ChannelID: bound.ID, GroupID: groups[0].ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !epgSvc.Status().Refreshing {
+		t.Fatal("swap onto a bound channel should rebuild")
+	}
+}
+
+func TestImportRelayFillRebuildsOwningRelays(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	epgSvc := epg.New(st, t.TempDir(), 1<<20, nil)
+	wf := &workflows.Workflows{Store: st, EPG: epgSvc, DefaultEPGInterval: time.Hour}
+
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "https://epg.example.com/guide.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "News", UpstreamURL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := st.CreateRelay(ctx, store.RelayInput{Name: "Old", Slug: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, old.ID)
+	if _, err := st.AddMembership(ctx, old.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	_ = epgSvc.DrainPending(ctx)
+
+	id := src.ID
+	if _, err := wf.ImportRelay(ctx, store.ImportRelayInput{
+		Name:               "New",
+		Slug:               "new",
+		EPGURLs:            []string{src.URL},
+		DefaultEPGInterval: time.Hour,
+		Entries: []store.ImportRelayEntry{
+			{Name: "News", UpstreamURL: "http://example.com/a.ts", GroupTitle: "News", TvgID: "a.id", EPGSourceID: &id},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !epgSvc.Status().Refreshing {
+		t.Fatal("fill-blank should rebuild owning relays")
+	}
+}

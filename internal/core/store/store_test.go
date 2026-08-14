@@ -224,25 +224,27 @@ func TestRelayLayoutAndUniqueMembership(t *testing.T) {
 	}
 }
 
-func TestMembershipRequiresExistingEPGSource(t *testing.T) {
+func TestChannelRequiresExistingEPGSource(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
-	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
 	epg, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
-	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "R", Slug: "r2"})
-	groups, _ := st.ListRelayGroups(ctx, relay.ID)
 	missing := int64(9999)
-	_, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &missing, TvgID: "x",
+	tvg := "x"
+	_, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "A", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &missing, TvgID: &tvg,
 	})
 	if !errors.Is(err, store.ErrValidation) {
 		t.Fatalf("expected validation, got %v", err)
 	}
 	id := epg.ID
-	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, EPGSourceID: &id, TvgID: "x",
-	}); err != nil {
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "A", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &id, TvgID: &tvg,
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if ch.EPGSourceID == nil || *ch.EPGSourceID != id || ch.TvgID != "x" {
+		t.Fatalf("channel epg=%+v", ch)
 	}
 }
 
@@ -256,13 +258,20 @@ func TestDuplicateTvgIDAcrossSourcesAllowed(t *testing.T) {
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "R", Slug: "tvg-dup"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
 	id1, id2 := epg1.ID, epg2.ID
+	same := "same"
+	if _, err := st.UpdateChannel(ctx, ch1.ID, store.ChannelInput{Name: ch1.Name, EPGSourceID: &id1, TvgID: &same}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateChannel(ctx, ch2.ID, store.ChannelInput{Name: ch2.Name, EPGSourceID: &id2, TvgID: &same}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch1.ID, GroupID: groups[0].ID, EPGSourceID: &id1, TvgID: "same",
+		ChannelID: ch1.ID, GroupID: groups[0].ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch2.ID, GroupID: groups[0].ID, EPGSourceID: &id2, TvgID: "same",
+		ChannelID: ch2.ID, GroupID: groups[0].ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -271,18 +280,21 @@ func TestDuplicateTvgIDAcrossSourcesAllowed(t *testing.T) {
 		t.Fatalf("same tvg-id on two sources should save; members=%+v err=%v", members, err)
 	}
 
-	ch3, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "C", UpstreamURL: "http://example.com/c.ts"})
+	other := "other"
+	ch3, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "C", UpstreamURL: "http://example.com/c.ts", EPGSourceID: &id1, TvgID: &other})
 	m3, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch3.ID, GroupID: groups[0].ID, EPGSourceID: &id1, TvgID: "other",
+		ChannelID: ch3.ID, GroupID: groups[0].ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.UpdateMembership(ctx, m3.ID, store.MembershipInput{
-		ChannelID: ch3.ID, GroupID: groups[0].ID, EPGSourceID: &id2, TvgID: "same",
-	})
+	gotCh, err := st.UpdateChannel(ctx, ch3.ID, store.ChannelInput{Name: ch3.Name, EPGSourceID: &id2, TvgID: &same})
+	if err != nil || gotCh.TvgID != "same" || gotCh.EPGSourceID == nil || *gotCh.EPGSourceID != id2 {
+		t.Fatalf("update to shared source tvg-id should save; got=%+v err=%v", gotCh, err)
+	}
+	got, err := st.GetMembership(ctx, m3.ID)
 	if err != nil || got.TvgID != "same" || got.EPGSourceID == nil || *got.EPGSourceID != id2 {
-		t.Fatalf("update to shared source tvg-id should save; got=%+v err=%v", got, err)
+		t.Fatalf("joined membership should follow channel; got=%+v err=%v", got, err)
 	}
 }
 
@@ -770,5 +782,325 @@ func TestImportRelayPreservesTranscodeFlag(t *testing.T) {
 	}
 	if created.TranscodeEnabled {
 		t.Fatal("imported channel must default false")
+	}
+}
+
+func TestChannelEPGOmitClearHalfPair(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "live.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := st.UpdateChannel(ctx, ch.ID, store.ChannelInput{Name: "News 2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.EPGSourceID == nil || *kept.EPGSourceID != src.ID || kept.TvgID != "live.id" {
+		t.Fatalf("omit must keep binding: %+v", kept)
+	}
+	empty := ""
+	cleared, err := st.UpdateChannel(ctx, ch.ID, store.ChannelInput{Name: "News 2", TvgID: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.EPGSourceID != nil || cleared.TvgID != "" {
+		t.Fatalf("explicit empty must clear: %+v", cleared)
+	}
+	_, err = st.UpdateChannel(ctx, ch.ID, store.ChannelInput{Name: "News 2", EPGSourceID: &src.ID})
+	if !errors.Is(err, store.ErrValidation) {
+		t.Fatalf("half-pair must be validation, got %v", err)
+	}
+	got, err := st.GetChannel(ctx, ch.ID)
+	if err != nil || got.EPGSourceID != nil {
+		t.Fatalf("half-pair must not wipe; got=%+v err=%v", got, err)
+	}
+}
+
+func TestMigrateChannelEPGBindings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-epg.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+PRAGMA foreign_keys = ON;
+CREATE TABLE epg_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  refresh_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+  last_refresh_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE,
+  logo_url TEXT NOT NULL DEFAULT '',
+  upstream_url TEXT NOT NULL UNIQUE,
+  headers_json TEXT NOT NULL DEFAULT '{}',
+  transcode_enabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE relays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE relay_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE relay_memberships (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES relay_groups(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
+  number INTEGER NOT NULL DEFAULT 0,
+  epg_source_id INTEGER REFERENCES epg_sources(id) ON DELETE RESTRICT,
+  tvg_id TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(relay_id, channel_id)
+);
+INSERT INTO epg_sources (id, name, url, enabled, refresh_interval_seconds, last_error, created_at, updated_at)
+VALUES (1, 'A', 'http://example.com/a.xml', 1, 3600, '', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+       (2, 'B', 'http://example.com/b.xml', 1, 3600, '', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, created_at, updated_at) VALUES
+ ('agree', 'Agree', '', 'http://example.com/agree.ts', '{}', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+ ('conflict', 'Conflict', '', 'http://example.com/conflict.ts', '{}', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
+ ('incomplete', 'Incomplete', '', 'http://example.com/inc.ts', '{}', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO relays (id, name, slug, created_at, updated_at) VALUES
+ (1, 'R1', 'r1', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'), (2, 'R2', 'r2', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO relay_groups (id, relay_id, name, sort_order) VALUES (1, 1, 'G', 0), (2, 2, 'G', 0);
+INSERT INTO relay_memberships (id, relay_id, group_id, channel_id, number, epg_source_id, tvg_id, sort_order) VALUES
+ (1, 1, 1, 'agree', 1, 1, 'same.id', 0),
+ (2, 2, 2, 'agree', 1, 1, 'same.id', 0),
+ (3, 1, 1, 'conflict', 2, 1, 'first.id', 1),
+ (4, 2, 2, 'conflict', 2, 2, 'later.id', 1),
+ (5, 1, 1, 'incomplete', 3, NULL, 'only.tvg', 2);
+`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	agree, err := st.GetChannel(ctx, "agree")
+	if err != nil || agree.EPGSourceID == nil || *agree.EPGSourceID != 1 || agree.TvgID != "same.id" {
+		t.Fatalf("agree=%+v err=%v", agree, err)
+	}
+	conflict, err := st.GetChannel(ctx, "conflict")
+	if err != nil || conflict.EPGSourceID == nil || *conflict.EPGSourceID != 1 || conflict.TvgID != "first.id" {
+		t.Fatalf("conflict should keep lowest complete membership id; got=%+v err=%v", conflict, err)
+	}
+	inc, err := st.GetChannel(ctx, "incomplete")
+	if err != nil || inc.EPGSourceID != nil || inc.TvgID != "" {
+		t.Fatalf("incomplete-only must stay empty; got=%+v err=%v", inc, err)
+	}
+
+	st.Close()
+	st, err = store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	agree, err = st.GetChannel(ctx, "agree")
+	if err != nil || agree.TvgID != "same.id" {
+		t.Fatalf("reopen must keep migrated binding: %+v err=%v", agree, err)
+	}
+}
+
+func TestMigrateChannelEPGIgnoresLeftoverNewTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "leftover-epg.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+PRAGMA foreign_keys = ON;
+CREATE TABLE epg_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  refresh_interval_seconds INTEGER NOT NULL DEFAULT 3600,
+  last_refresh_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE channels (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE,
+  logo_url TEXT NOT NULL DEFAULT '',
+  upstream_url TEXT NOT NULL UNIQUE,
+  headers_json TEXT NOT NULL DEFAULT '{}',
+  transcode_enabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE relays (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE relay_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE relay_memberships (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES relay_groups(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
+  number INTEGER NOT NULL DEFAULT 0,
+  epg_source_id INTEGER REFERENCES epg_sources(id) ON DELETE RESTRICT,
+  tvg_id TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(relay_id, channel_id)
+);
+CREATE TABLE relay_memberships_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL,
+  group_id INTEGER NOT NULL,
+  channel_id TEXT NOT NULL,
+  number INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO epg_sources (id, name, url, enabled, refresh_interval_seconds, last_error, created_at, updated_at)
+VALUES (1, 'A', 'http://example.com/a.xml', 1, 3600, '', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, created_at, updated_at) VALUES
+ ('agree', 'Agree', '', 'http://example.com/agree.ts', '{}', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO relays (id, name, slug, created_at, updated_at) VALUES (1, 'R1', 'r1', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+INSERT INTO relay_groups (id, relay_id, name, sort_order) VALUES (1, 1, 'G', 0);
+INSERT INTO relay_memberships (id, relay_id, group_id, channel_id, number, epg_source_id, tvg_id, sort_order) VALUES
+ (1, 1, 1, 'agree', 1, 1, 'same.id', 0);
+`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	agree, err := st.GetChannel(context.Background(), "agree")
+	if err != nil || agree.TvgID != "same.id" {
+		t.Fatalf("leftover _new table must not block migrate: %+v err=%v", agree, err)
+	}
+}
+
+func TestImportRelayFillBlankEPG(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "https://epg.example.com/guide.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "News", UpstreamURL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := st.CreateRelay(ctx, store.RelayInput{Name: "Old", Slug: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relay.ID)
+	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	id := src.ID
+	out, err := st.ImportRelay(ctx, store.ImportRelayInput{
+		Name:               "New",
+		Slug:               "new",
+		EPGURLs:            []string{src.URL},
+		DefaultEPGInterval: time.Hour,
+		Entries: []store.ImportRelayEntry{
+			{Name: "News", UpstreamURL: "http://example.com/a.ts", GroupTitle: "News", TvgID: "a.id", EPGSourceID: &id},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.UpdatedIDs) != 1 || out.UpdatedIDs[0] != ch.ID {
+		t.Fatalf("fill-blank should record updated id: %+v", out)
+	}
+	filled, err := st.GetChannel(ctx, ch.ID)
+	if err != nil || filled.EPGSourceID == nil || *filled.EPGSourceID != src.ID || filled.TvgID != "a.id" {
+		t.Fatalf("filled=%+v err=%v", filled, err)
+	}
+
+	other := "other.id"
+	out2, err := st.ImportRelay(ctx, store.ImportRelayInput{
+		Name:               "Third",
+		Slug:               "third",
+		EPGURLs:            []string{src.URL},
+		DefaultEPGInterval: time.Hour,
+		Entries: []store.ImportRelayEntry{
+			{Name: "News", UpstreamURL: "http://example.com/a.ts", GroupTitle: "News", TvgID: other, EPGSourceID: &id},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out2.UpdatedIDs) != 0 {
+		t.Fatalf("must not overwrite: %+v", out2)
+	}
+	kept, err := st.GetChannel(ctx, ch.ID)
+	if err != nil || kept.TvgID != "a.id" {
+		t.Fatalf("overwrite guard failed: %+v err=%v", kept, err)
+	}
+}
+
+func TestDeleteEPGSourceBlockedByChannel(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "a.id"
+	if _, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = st.DeleteEPGSource(ctx, src.ID)
+	if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "channel") {
+		t.Fatalf("expected channel-in-use conflict, got %v", err)
 	}
 }

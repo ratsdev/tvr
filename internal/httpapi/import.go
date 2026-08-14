@@ -164,6 +164,11 @@ func (s *Server) handleImportRelay(w http.ResponseWriter, r *http.Request) {
 		s.writeWorkflowError(w, err)
 		return
 	}
+	if err := s.publishImportedChannelRevisions(imported.UpdatedIDs); err != nil {
+		s.logger.Error("publish imported channel revision", "err", err)
+		writeError(w, http.StatusGatewayTimeout, fmt.Errorf("relay imported but active relay cleanup failed: %w", err))
+		return
+	}
 
 	base := s.publicBaseURL(r)
 	result := importRelayResult{
@@ -290,4 +295,25 @@ func (s *Server) handleImportChannels(w http.ResponseWriter, r *http.Request) {
 		UpstreamsAdded:  imported.UpstreamsAdded,
 		Warnings:        warnings,
 	})
+}
+
+func (s *Server) publishImportedChannelRevisions(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+	for _, id := range ids {
+		ch, err := s.store.GetChannel(context.Background(), id)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), channelStreamCleanupTimeout)
+		err = s.live.PublishChannel(ctx, ch.ID, ch.UpdatedAt.UTC().Format(time.RFC3339Nano), false)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

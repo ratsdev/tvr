@@ -40,12 +40,13 @@ func TestRefreshBuildsPerRelayCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "Keep", UpstreamURL: "http://example.com/a.ts"})
+	tvg := "keep.id"
+	epgID := src.ID
+	ch, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "Keep", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &epgID, TvgID: &tvg})
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
-	epgID := src.ID
 	_, err = st.AddMembership(ctx, relay.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 1, EPGSourceID: &epgID, TvgID: "keep.id",
+		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,16 +95,17 @@ func TestRelayEPGRewritesCollidingSourceIDs(t *testing.T) {
 
 	srcA, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "A", URL: upA.URL, RefreshInterval: "1h"}, time.Hour)
 	srcB, _ := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "B", URL: upB.URL, RefreshInterval: "1h"}, time.Hour)
-	chA, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts"})
-	chB, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts"})
+	idA, idB := srcA.ID, srcB.ID
+	tvg := "cnn"
+	chA, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "A", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &idA, TvgID: &tvg})
+	chB, _ := st.CreateChannel(ctx, store.ChannelInput{Name: "B", UpstreamURL: "http://example.com/b.ts", EPGSourceID: &idB, TvgID: &tvg})
 	relay, _ := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "collide"})
 	groups, _ := st.ListRelayGroups(ctx, relay.ID)
-	idA, idB := srcA.ID, srcB.ID
-	_, err = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chA.ID, GroupID: groups[0].ID, EPGSourceID: &idA, TvgID: "cnn"})
+	_, err = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chA.ID, GroupID: groups[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chB.ID, GroupID: groups[0].ID, EPGSourceID: &idB, TvgID: "cnn"})
+	_, err = st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: chB.ID, GroupID: groups[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}

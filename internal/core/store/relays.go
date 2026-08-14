@@ -255,7 +255,7 @@ SELECT COUNT(*) FROM relay_memberships WHERE group_id = ? AND relay_id = ?`, gro
 // ListRelayMemberships returns memberships with joined channel/group info.
 func (s *Store) ListRelayMemberships(ctx context.Context, relayID int64) ([]RelayMembership, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, m.epg_source_id, m.tvg_id, m.sort_order,
+SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
        c.name, c.logo_url, c.upstream_url, g.name
 FROM relay_memberships m
 JOIN channels c ON c.id = m.channel_id
@@ -283,7 +283,7 @@ ORDER BY g.sort_order ASC, m.sort_order ASC, m.id ASC`, relayID)
 // GetMembership returns a membership by ID.
 func (s *Store) GetMembership(ctx context.Context, id int64) (RelayMembership, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, m.epg_source_id, m.tvg_id, m.sort_order,
+SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
        c.name, c.logo_url, c.upstream_url, g.name
 FROM relay_memberships m
 JOIN channels c ON c.id = m.channel_id
@@ -341,7 +341,7 @@ UPDATE relay_memberships SET number = ? WHERE id = ? AND relay_id = ?`, i+1, id,
 
 func getMembershipQ(ctx context.Context, q querier, id int64) (RelayMembership, error) {
 	row := q.QueryRowContext(ctx, `
-SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, m.epg_source_id, m.tvg_id, m.sort_order,
+SELECT m.id, m.relay_id, m.group_id, m.channel_id, m.number, c.epg_source_id, c.tvg_id, m.sort_order,
        c.name, c.logo_url, c.upstream_url, g.name
 FROM relay_memberships m
 JOIN channels c ON c.id = m.channel_id
@@ -378,19 +378,6 @@ func validateMembershipInputQ(ctx context.Context, q querier, relayID int64, in 
 		}
 		return err
 	}
-	if in.EPGSourceID != nil {
-		if *in.EPGSourceID <= 0 {
-			return fmt.Errorf("%w: epg_source_id is invalid", ErrValidation)
-		}
-		var exists int
-		err := q.QueryRowContext(ctx, `SELECT 1 FROM epg_sources WHERE id = ?`, *in.EPGSourceID).Scan(&exists)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: epg source not found", ErrValidation)
-		}
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -408,9 +395,9 @@ SELECT MAX(sort_order) FROM relay_memberships WHERE group_id = ?`, in.GroupID).S
 		ord = int(maxOrd.Int64) + 1
 	}
 	res, err := tx.ExecContext(ctx, `
-INSERT INTO relay_memberships (relay_id, group_id, channel_id, number, epg_source_id, tvg_id, sort_order)
-VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		relayID, in.GroupID, in.ChannelID, 0, nullableInt64(in.EPGSourceID), strings.TrimSpace(in.TvgID), ord)
+INSERT INTO relay_memberships (relay_id, group_id, channel_id, number, sort_order)
+VALUES (?, ?, ?, ?, ?)`,
+		relayID, in.GroupID, in.ChannelID, 0, ord)
 	if err != nil {
 		if isUniqueErr(err) {
 			return RelayMembership{}, fmt.Errorf("%w: channel already in this relay", ErrConflict)
@@ -447,9 +434,9 @@ func updateMembershipTx(ctx context.Context, tx *sql.Tx, membershipID int64, in 
 	}
 	_, err = tx.ExecContext(ctx, `
 UPDATE relay_memberships
-SET group_id = ?, channel_id = ?, epg_source_id = ?, tvg_id = ?, sort_order = ?
+SET group_id = ?, channel_id = ?, sort_order = ?
 WHERE id = ?`,
-		in.GroupID, in.ChannelID, nullableInt64(in.EPGSourceID), strings.TrimSpace(in.TvgID), ord, membershipID)
+		in.GroupID, in.ChannelID, ord, membershipID)
 	if err != nil {
 		if isUniqueErr(err) {
 			return RelayMembership{}, fmt.Errorf("%w: channel already in this relay", ErrConflict)
@@ -604,7 +591,7 @@ func (s *Store) ListRelayLineup(ctx context.Context, slug string) (Relay, []Line
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT m.id, m.channel_id, c.name, c.logo_url, c.upstream_url, c.headers_json,
-       m.number, m.tvg_id, g.name, m.epg_source_id
+       m.number, c.tvg_id, g.name, c.epg_source_id
 FROM relay_memberships m
 JOIN channels c ON c.id = m.channel_id
 JOIN relay_groups g ON g.id = m.group_id
@@ -644,10 +631,11 @@ ORDER BY g.sort_order ASC, m.sort_order ASC, m.id ASC`, relay.ID)
 // ListAllRelayEPGMappings returns all membership EPG bindings for refresh.
 func (s *Store) ListAllRelayEPGMappings(ctx context.Context) ([]RelayEPGMapping, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT r.id, r.slug, m.epg_source_id, m.tvg_id
+SELECT r.id, r.slug, c.epg_source_id, c.tvg_id
 FROM relay_memberships m
 JOIN relays r ON r.id = m.relay_id
-WHERE m.epg_source_id IS NOT NULL AND m.tvg_id <> ''`)
+JOIN channels c ON c.id = m.channel_id
+WHERE c.epg_source_id IS NOT NULL AND c.tvg_id <> ''`)
 	if err != nil {
 		return nil, err
 	}

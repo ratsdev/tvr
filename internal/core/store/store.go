@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS channels (
   transcode_enabled INTEGER NOT NULL DEFAULT 0,
   upstream_policy TEXT NOT NULL DEFAULT 'fixed',
   fixed_upstream_id TEXT,
+  epg_source_id INTEGER REFERENCES epg_sources(id) ON DELETE RESTRICT,
+  tvg_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -148,8 +150,6 @@ CREATE TABLE IF NOT EXISTS relay_memberships (
   group_id INTEGER NOT NULL REFERENCES relay_groups(id) ON DELETE CASCADE,
   channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
   number INTEGER NOT NULL DEFAULT 0,
-  epg_source_id INTEGER REFERENCES epg_sources(id) ON DELETE RESTRICT,
-  tvg_id TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(relay_id, channel_id)
 );
@@ -185,12 +185,92 @@ CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(ch
 	if err := s.ensureNoRelayEPGSources(); err != nil {
 		return err
 	}
+	if err := s.ensureChannelEPG(); err != nil {
+		return err
+	}
 	return s.ensureChannelNameUniqueIndex()
 }
 
 func (s *Store) ensureNoRelayEPGSources() error {
 	_, err := s.db.Exec(`DROP TABLE IF EXISTS relay_epg_sources`)
 	return err
+}
+
+func (s *Store) ensureChannelEPG() error {
+	hasSrc, err := hasChannelColumn(s.db, "epg_source_id")
+	if err != nil {
+		return err
+	}
+	if !hasSrc {
+		if _, err := s.db.Exec(`ALTER TABLE channels ADD COLUMN epg_source_id INTEGER REFERENCES epg_sources(id) ON DELETE RESTRICT`); err != nil {
+			return err
+		}
+	}
+	hasTvg, err := hasChannelColumn(s.db, "tvg_id")
+	if err != nil {
+		return err
+	}
+	if !hasTvg {
+		if _, err := s.db.Exec(`ALTER TABLE channels ADD COLUMN tvg_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	hasMemEPG, err := hasTableColumn(s.db, "relay_memberships", "epg_source_id")
+	if err != nil {
+		return err
+	}
+	if !hasMemEPG {
+		return nil
+	}
+	if _, err := s.db.Exec(`DROP TABLE IF EXISTS relay_memberships_new`); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+UPDATE channels
+SET epg_source_id = (
+  SELECT m.epg_source_id FROM relay_memberships m
+  WHERE m.channel_id = channels.id
+    AND m.epg_source_id IS NOT NULL AND TRIM(m.tvg_id) <> ''
+  ORDER BY m.id ASC LIMIT 1
+),
+tvg_id = COALESCE((
+  SELECT m.tvg_id FROM relay_memberships m
+  WHERE m.channel_id = channels.id
+    AND m.epg_source_id IS NOT NULL AND TRIM(m.tvg_id) <> ''
+  ORDER BY m.id ASC LIMIT 1
+), '')
+WHERE EXISTS (
+  SELECT 1 FROM relay_memberships m
+  WHERE m.channel_id = channels.id
+    AND m.epg_source_id IS NOT NULL AND TRIM(m.tvg_id) <> ''
+)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+CREATE TABLE relay_memberships_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  relay_id INTEGER NOT NULL REFERENCES relays(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES relay_groups(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE RESTRICT,
+  number INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(relay_id, channel_id)
+);
+INSERT INTO relay_memberships_new (id, relay_id, group_id, channel_id, number, sort_order)
+SELECT id, relay_id, group_id, channel_id, number, sort_order FROM relay_memberships;
+DROP TABLE relay_memberships;
+ALTER TABLE relay_memberships_new RENAME TO relay_memberships;
+CREATE INDEX IF NOT EXISTS idx_relay_memberships_group ON relay_memberships(group_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_relay_memberships_channel ON relay_memberships(channel_id);
+`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureChannelUpstreams() error {
@@ -408,7 +488,7 @@ func (s *Store) ensureChannelNameUniqueIndex() error {
 // ListChannels returns all global channels.
 func (s *Store) ListChannels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
 FROM channels c`)
 	if err != nil {
 		return nil, err
@@ -444,7 +524,7 @@ func (s *Store) GetChannel(ctx context.Context, id string) (Channel, error) {
 		return Channel{}, ErrNotFound
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.created_at, c.updated_at
+SELECT c.id, c.name, c.logo_url, c.upstream_url, c.headers_json, c.transcode_enabled, c.epg_source_id, c.tvg_id, c.created_at, c.updated_at
 FROM channels c WHERE c.id = ?`, id)
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -537,7 +617,14 @@ func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (
 		return Channel{}, err
 	}
 	transcode := resolveTranscodeEnabled(in.TranscodeEnabled, existing.TranscodeEnabled)
+	epgID, tvgID, err := resolveChannelEPG(in, &existing)
+	if err != nil {
+		return Channel{}, err
+	}
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := ensureEPGSourceExists(ctx, tx, epgID); err != nil {
+			return err
+		}
 		spec, err := resolveChannelSpec(ctx, tx, in, &existing)
 		if err != nil {
 			return err
@@ -548,7 +635,7 @@ func (s *Store) UpdateChannel(ctx context.Context, id string, in ChannelInput) (
 		_, err = tx.ExecContext(ctx, `
 UPDATE channels
 SET name = ?, logo_url = ?, upstream_url = ?, headers_json = ?, transcode_enabled = ?,
-    upstream_policy = ?, fixed_upstream_id = ?, updated_at = ?
+    upstream_policy = ?, fixed_upstream_id = ?, epg_source_id = ?, tvg_id = ?, updated_at = ?
 WHERE id = ?`,
 			strings.TrimSpace(in.Name),
 			strings.TrimSpace(in.LogoURL),
@@ -557,6 +644,8 @@ WHERE id = ?`,
 			boolToInt(transcode),
 			spec.policy,
 			spec.fixedID,
+			nullableInt64(epgID),
+			tvgID,
 			time.Now().UTC().Format(time.RFC3339Nano),
 			id,
 		)
@@ -614,6 +703,42 @@ ORDER BY r.slug`, channelID)
 		out = append(out, slug)
 	}
 	return out, rows.Err()
+}
+
+// ChannelRelayIDs returns relay IDs that include a channel.
+func (s *Store) ChannelRelayIDs(ctx context.Context, channelID string) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT r.id FROM relays r
+JOIN relay_memberships m ON m.relay_id = r.id
+WHERE m.channel_id = ?
+ORDER BY r.id`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// MappingKey is the effective complete EPG pair, or empty if unbound.
+func MappingKey(epgID *int64, tvgID string) string {
+	tvgID = strings.TrimSpace(tvgID)
+	if epgID == nil || tvgID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d\x00%s", *epgID, tvgID)
+}
+
+// ChannelEPGKey is the effective complete EPG pair on a channel, or empty if unbound.
+func ChannelEPGKey(ch Channel) string {
+	return MappingKey(ch.EPGSourceID, ch.TvgID)
 }
 
 // ListEPGSources returns all EPG sources.
@@ -751,49 +876,34 @@ WHERE id = ?`,
 	return s.GetEPGSource(ctx, id)
 }
 
-// DeleteEPGSource removes an EPG source if unused by relays.
+// DeleteEPGSource removes an EPG source if unused by channels.
 func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
-	names, err := s.EPGSourceRelayNames(ctx, id)
+	n, err := s.EPGSourceChannelCount(ctx, id)
 	if err != nil {
 		return err
 	}
-	if len(names) > 0 {
-		return fmt.Errorf("%w: epg source used by relays: %s", ErrConflict, strings.Join(names, ", "))
+	if n > 0 {
+		return fmt.Errorf("%w: epg source used by %d channel(s)", ErrConflict, n)
 	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM epg_sources WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
+	affected, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
-	if n == 0 {
+	if affected == 0 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-// EPGSourceRelayNames returns relay names that use an EPG source on a membership.
-func (s *Store) EPGSourceRelayNames(ctx context.Context, epgSourceID int64) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT DISTINCT r.name FROM relays r
-JOIN relay_memberships m ON m.relay_id = r.id
-WHERE m.epg_source_id = ?
-ORDER BY r.name`, epgSourceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
+// EPGSourceChannelCount returns how many channels bind to an EPG source.
+func (s *Store) EPGSourceChannelCount(ctx context.Context, epgSourceID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels WHERE epg_source_id = ?`, epgSourceID).Scan(&n)
+	return n, err
 }
 
 // MarkEPGSourceRefresh records a successful EPG refresh publication.
@@ -828,14 +938,19 @@ func scanChannel(row rowScanner) (Channel, error) {
 		ch          Channel
 		headersJSON string
 		transcode   int
+		epgID       sql.NullInt64
 		createdAt   string
 		updatedAt   string
 	)
-	err := row.Scan(&ch.ID, &ch.Name, &ch.LogoURL, &ch.UpstreamURL, &headersJSON, &transcode, &createdAt, &updatedAt)
+	err := row.Scan(&ch.ID, &ch.Name, &ch.LogoURL, &ch.UpstreamURL, &headersJSON, &transcode, &epgID, &ch.TvgID, &createdAt, &updatedAt)
 	if err != nil {
 		return Channel{}, err
 	}
 	ch.TranscodeEnabled = transcode != 0
+	if epgID.Valid {
+		v := epgID.Int64
+		ch.EPGSourceID = &v
+	}
 	ch.Headers = map[string]string{}
 	if headersJSON != "" {
 		if err := json.Unmarshal([]byte(headersJSON), &ch.Headers); err != nil {
@@ -851,6 +966,38 @@ func scanChannel(row rowScanner) (Channel, error) {
 		return Channel{}, err
 	}
 	return ch, nil
+}
+
+func resolveChannelEPG(in ChannelInput, existing *Channel) (*int64, string, error) {
+	if in.EPGSourceID == nil && in.TvgID == nil {
+		if existing != nil {
+			return existing.EPGSourceID, existing.TvgID, nil
+		}
+		return nil, "", nil
+	}
+	if in.EPGSourceID == nil && in.TvgID != nil && *in.TvgID == "" {
+		return nil, "", nil
+	}
+	if in.EPGSourceID != nil && in.TvgID != nil {
+		tvg := strings.TrimSpace(*in.TvgID)
+		if tvg != "" && *in.EPGSourceID > 0 {
+			id := *in.EPGSourceID
+			return &id, tvg, nil
+		}
+	}
+	return nil, "", fmt.Errorf("%w: epg_source_id and tvg_id must both be set or both be empty", ErrValidation)
+}
+
+func ensureEPGSourceExists(ctx context.Context, q querier, id *int64) error {
+	if id == nil {
+		return nil
+	}
+	var exists int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM epg_sources WHERE id = ?`, *id).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: epg source not found", ErrValidation)
+	}
+	return err
 }
 
 func scanEPGSource(row rowScanner) (EPGSource, error) {

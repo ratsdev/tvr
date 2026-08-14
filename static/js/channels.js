@@ -173,7 +173,7 @@ function parseHeadersField(raw, errEl) {
 function updatePolicyHint() {
   const policy = document.getElementById("channel-policy").value;
   document.getElementById("channel-policy-hint").textContent = POLICY_HINT[policy] || "";
-  document.querySelectorAll(".upstream-row").forEach((row) => {
+  document.querySelectorAll("#channel-upstreams .upstream-row").forEach((row) => {
     row.classList.toggle("fixed-off", policy !== "fixed");
   });
 }
@@ -297,6 +297,8 @@ function readChannelDraft() {
     upstreams: rows.map((u) => ({ id: u.id, url: u.url, proxy_id: u.proxy_id || "", headers: normalizeOverlay(u.headers) })),
     headers: document.getElementById("channel-headers").value,
     transcode_enabled: document.getElementById("channel-transcode").checked,
+    epg_source_id: document.getElementById("channel-epg-source").value || "",
+    tvg_id: document.getElementById("channel-tvg-id").value || "",
   };
 }
 
@@ -309,6 +311,9 @@ function fillChannelForm(ch) {
   document.getElementById("channel-id").value = ch?.id || "";
   document.getElementById("channel-name").value = ch?.name || "";
   document.getElementById("channel-logo").value = ch?.logo_url || "";
+  fillChannelEPGSources(ch?.epg_source_id ?? "");
+  channelTvg.reset(ch?.tvg_id || "");
+  channelTvg.setEnabled(!!ch?.epg_source_id);
   document.getElementById("channel-policy").value = ch?.upstream_policy || "fixed";
   document.getElementById("channel-transcode").checked = !!ch?.transcode_enabled;
   document.getElementById("channel-headers").value = JSON.stringify(ch?.headers || {}, null, 2);
@@ -320,6 +325,18 @@ function fillChannelForm(ch) {
   setChannelDetailLogo(ch?.logo_url || "");
   document.getElementById("channel-error").textContent = "";
   state.editors.channel.baseline = readChannelDraft();
+  channelTvg.resolveLabel(ch?.tvg_id || "");
+}
+
+function fillChannelEPGSources(selected) {
+  const sel = document.getElementById("channel-epg-source");
+  const id = selected == null ? "" : String(selected);
+  sel.innerHTML = `<option value="">(None)</option>` + (state.epgs || []).map((e) =>
+    `<option value="${e.id}" ${String(e.id) === id ? "selected" : ""}>${esc(e.name)}</option>`
+  ).join("");
+  if (id && !sel.value) {
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(id)}" selected>${esc(id)}</option>`);
+  }
 }
 
 function updateChannelMeta(ch) {
@@ -388,6 +405,7 @@ async function applyChannelSave(saved) {
   state.creatingChannel = false;
   state.selectedChannelId = saved.id;
   await loadChannels();
+  if (typeof renderLineup === "function") renderLineup();
   showChannelDetail({ forceFill: true });
 }
 
@@ -412,6 +430,148 @@ function selectChannel(id) {
   renderChannelList();
   showChannelDetail({ forceFill: true });
 }
+
+const channelTvg = (() => {
+  let searchTimer = 0;
+  let blurTimer = 0;
+  const el = (id) => document.getElementById(id);
+
+  function sourceID() { return el("channel-epg-source").value; }
+  function selectedID() { return el("channel-tvg-id").value; }
+
+  function query() {
+    const qEl = el("channel-tvg-q");
+    const q = qEl.value.trim();
+    const committed = (qEl.dataset.label || "").trim();
+    return !q || q === committed ? "" : q;
+  }
+
+  function setEnabled(on) {
+    el("channel-tvg-q").disabled = !on;
+  }
+
+  function hidePop() {
+    el("channel-tvg-pop").classList.add("hidden");
+  }
+
+  function setSelection(id, label) {
+    id = id || "";
+    const text = id ? (label || id) : "";
+    el("channel-tvg-id").value = id;
+    const qEl = el("channel-tvg-q");
+    qEl.dataset.label = text;
+    qEl.value = text;
+    el("channel-tvg-clear").classList.toggle("hidden", !id);
+  }
+
+  function commit() {
+    clearTimeout(blurTimer);
+    hidePop();
+    const qEl = el("channel-tvg-q");
+    if (!qEl.value.trim()) setSelection("");
+    else qEl.value = qEl.dataset.label || "";
+  }
+
+  function reset(id) {
+    setSelection(id || "");
+    hidePop();
+  }
+
+  function renderResults(hits) {
+    const selected = selectedID();
+    el("channel-tvg-results").innerHTML = (hits || []).map((h) => {
+      const id = String(h.id);
+      const label = epgChannelLabel(h);
+      const active = id === selected ? "active" : "";
+      return `<button type="button" class="${active}" data-tvg-id="${esc(id)}" data-tvg-label="${esc(label)}">${esc(label)}</button>`;
+    }).join("");
+  }
+
+  function fetchChannels(q) {
+    return api(`/api/epg/sources/${sourceID()}/channels?q=${encodeURIComponent(q)}&limit=50`);
+  }
+
+  async function resolveLabel(id) {
+    if (!sourceID() || !id) return;
+    const gen = ++state.gens.tvg;
+    try {
+      const res = await fetchChannels(id);
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+      const exact = (res.channels || []).find((h) => h.id === id);
+      if (!exact || selectedID() !== id) return;
+      const qEl = el("channel-tvg-q");
+      if (document.activeElement === qEl && query()) {
+        qEl.dataset.label = epgChannelLabel(exact);
+        return;
+      }
+      setSelection(id, epgChannelLabel(exact));
+    } catch { /* keep bare id */ }
+  }
+
+  async function search() {
+    const qEl = el("channel-tvg-q");
+    const hintEl = el("channel-tvg-hint");
+    const q = query();
+    if (!sourceID() || !q) {
+      hidePop();
+      hintEl.textContent = "";
+      renderResults([]);
+      return;
+    }
+    const gen = ++state.gens.tvg;
+    let hits = [];
+    let total = 0;
+    try {
+      const res = await fetchChannels(q);
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+      hits = res.channels || [];
+      total = res.total || 0;
+    } catch {
+      if (!isCurrentGeneration(gen, state.gens.tvg)) return;
+    }
+    hintEl.textContent = epgChannelHint(hits.length, total);
+    renderResults(hits);
+    if (document.activeElement === qEl) el("channel-tvg-pop").classList.remove("hidden");
+    else hidePop();
+  }
+
+  function scheduleSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(search, 200);
+  }
+
+  function flushSearch() {
+    clearTimeout(searchTimer);
+    search();
+  }
+
+  function cancel() {
+    el("channel-tvg-q").value = el("channel-tvg-q").dataset.label || "";
+    commit();
+  }
+
+  function scheduleCommit() {
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(commit, 120);
+  }
+
+  function pick(id, label) {
+    clearTimeout(blurTimer);
+    setSelection(id, label);
+    hidePop();
+  }
+
+  function clear() {
+    clearTimeout(blurTimer);
+    el("channel-epg-source").value = "";
+    setEnabled(false);
+    setSelection("");
+    hidePop();
+    el("channel-epg-source").focus();
+  }
+
+  return { setEnabled, reset, commit, resolveLabel, scheduleSearch, flushSearch, cancel, scheduleCommit, pick, clear };
+})();
 
 function wireChannels() {
   document.getElementById("channel-search").addEventListener("input", (e) => {
@@ -535,6 +695,13 @@ function wireChannels() {
     }
     const radio = document.querySelector("input[name='channel-fixed-up']:checked");
     const fixedId = radio ? (rows[Number(radio.value)]?.id || "") : (rows[0]?.id || "");
+    channelTvg.commit();
+    const epgRaw = document.getElementById("channel-epg-source").value;
+    const tvg = document.getElementById("channel-tvg-id").value.trim();
+    if (epgRaw && !tvg) {
+      errEl.textContent = "Select an EPG channel, or set EPG Source to None";
+      return;
+    }
     const body = {
       name: document.getElementById("channel-name").value,
       logo_url: document.getElementById("channel-logo").value,
@@ -548,6 +715,8 @@ function wireChannels() {
       }),
       headers,
       transcode_enabled: document.getElementById("channel-transcode").checked,
+      epg_source_id: epgRaw && tvg ? Number(epgRaw) : null,
+      tvg_id: tvg,
     };
     const id = document.getElementById("channel-id").value;
     try {
@@ -680,4 +849,26 @@ function wireChannels() {
     }
   });
 
+  document.getElementById("channel-tvg-q").addEventListener("input", () => channelTvg.scheduleSearch());
+  document.getElementById("channel-tvg-q").addEventListener("focus", () => {
+    const qEl = document.getElementById("channel-tvg-q");
+    if (qEl.value.trim() && qEl.value.trim() !== (qEl.dataset.label || "").trim()) channelTvg.flushSearch();
+  });
+  document.getElementById("channel-tvg-q").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      channelTvg.cancel();
+    }
+  });
+  document.getElementById("channel-tvg-q").addEventListener("blur", () => channelTvg.scheduleCommit());
+  document.getElementById("channel-tvg-pop").addEventListener("mousedown", (e) => e.preventDefault());
+  document.getElementById("channel-tvg-results").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-tvg-id]");
+    if (btn) channelTvg.pick(btn.dataset.tvgId, btn.dataset.tvgLabel);
+  });
+  document.getElementById("channel-tvg-clear").addEventListener("click", () => channelTvg.clear());
+  document.getElementById("channel-epg-source").addEventListener("change", () => {
+    channelTvg.setEnabled(!!document.getElementById("channel-epg-source").value);
+    channelTvg.reset("");
+  });
 }

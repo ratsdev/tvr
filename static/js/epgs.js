@@ -139,6 +139,11 @@ async function loadEPG({ withStatus = true } = {}) {
   }
   renderEPGList();
   showEPGDetail({ forceFill: false });
+  const channelSel = document.getElementById("channel-epg-source");
+  if (channelSel && typeof fillChannelEPGSources === "function") {
+    fillChannelEPGSources(channelSel.value);
+  }
+  if (typeof renderLineup === "function") renderLineup();
 }
 
 async function applyEPGSave(saved) {

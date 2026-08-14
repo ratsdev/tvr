@@ -87,7 +87,7 @@ func TestRelayPlaylistAndStream(t *testing.T) {
 	}
 	groups, _ := st.ListRelayGroups(ctx, relayRow.ID)
 	if _, err := st.AddMembership(ctx, relayRow.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 5, TvgID: "live.id",
+		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 5,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,11 +126,13 @@ func TestRelayPlaylistAndStream(t *testing.T) {
 func TestRelayPlaylistPublicTvgID(t *testing.T) {
 	srv, st, _ := newTestServer(t)
 	ctx := context.Background()
-	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Live", UpstreamURL: "http://example.com/live.ts"})
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	id := src.ID
+	tvg := "live.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Live", UpstreamURL: "http://example.com/live.ts", EPGSourceID: &id, TvgID: &tvg})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +141,8 @@ func TestRelayPlaylistPublicTvgID(t *testing.T) {
 		t.Fatal(err)
 	}
 	groups, _ := st.ListRelayGroups(ctx, relayRow.ID)
-	id := src.ID
 	if _, err := st.AddMembership(ctx, relayRow.ID, store.MembershipInput{
-		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 5, EPGSourceID: &id, TvgID: "live.id",
+		ChannelID: ch.ID, GroupID: groups[0].ID, Number: 5,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1558,5 +1559,295 @@ func TestImportChannelsTXTAppendPublishesRevision(t *testing.T) {
 	src.Revision = oldRev
 	if _, err := rel.Subscribe(ctx, fresh.ID, src); !errors.Is(err, stream.ErrStaleRevision) {
 		t.Fatalf("want stale revision after publish, got %v", err)
+	}
+}
+
+func TestChannelPutOmitsEPGPreservesBinding(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "live.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"Live 2","logo_url":"","upstream_url":"http://example.com/a.ts","headers":{}}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("status=%d body=%s", res.StatusCode, b)
+	}
+	var out store.Channel
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.EPGSourceID == nil || *out.EPGSourceID != src.ID || out.TvgID != "live.id" {
+		t.Fatalf("omit must keep epg: %+v", out)
+	}
+}
+
+func TestChannelPutClearsAndRejectsHalfPairEPG(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "live.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := fmt.Sprintf(`{"name":"Live","logo_url":"","upstream_url":"http://example.com/a.ts","headers":{},"epg_source_id":%d}`, src.ID)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(half))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("half-pair status=%d", res.StatusCode)
+	}
+	clear := `{"name":"Live","logo_url":"","upstream_url":"http://example.com/a.ts","headers":{},"tvg_id":""}`
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, strings.NewReader(clear))
+	req.Header.Set("Content-Type", "application/json")
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("clear status=%d body=%s", res.StatusCode, b)
+	}
+	var out store.Channel
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.EPGSourceID != nil || out.TvgID != "" {
+		t.Fatalf("clear failed: %+v", out)
+	}
+}
+
+func TestChannelEPGOnlyDoesNotInvalidateSession(t *testing.T) {
+	up := httptest.NewServer(liveTSHandler())
+	t.Cleanup(up.Close)
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Live", UpstreamURL: up.URL + "/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx2, http.MethodGet, srv.URL+"/stream/"+ch.ID, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	buf := make([]byte, 188)
+	if _, err := io.ReadFull(res.Body, buf); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"name":            "Live",
+		"logo_url":        "",
+		"upstream_url":    ch.UpstreamURL,
+		"headers":         map[string]string{},
+		"epg_source_id":   src.ID,
+		"tvg_id":          "live.id",
+		"upstreams":       []map[string]any{{"id": ch.Upstreams[0].ID, "url": ch.Upstreams[0].URL}},
+		"upstream_policy": ch.UpstreamPolicy,
+	})
+	put, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, bytes.NewReader(body))
+	put.Header.Set("Content-Type", "application/json")
+	upd, err := http.DefaultClient.Do(put)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upd.Body.Close()
+	if upd.StatusCode != 200 {
+		b, _ := io.ReadAll(upd.Body)
+		t.Fatalf("put status=%d body=%s", upd.StatusCode, b)
+	}
+	if _, err := io.ReadFull(res.Body, buf); err != nil {
+		t.Fatalf("epg-only update must not tear down the session: %v", err)
+	}
+}
+
+func TestChannelEPGUpdateRebuildsOwningRelays(t *testing.T) {
+	srv, st, epgSvc := newTestServer(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "old.id"
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Live", UpstreamURL: "http://example.com/a.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relay.ID)
+	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	_ = epgSvc.DrainPending(ctx)
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Live", "logo_url": "", "upstream_url": ch.UpstreamURL, "headers": map[string]string{},
+		"epg_source_id": src.ID, "tvg_id": "new.id",
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("status=%d", res.StatusCode)
+	}
+	if !epgSvc.Status().Refreshing {
+		t.Fatal("channel epg change should rebuild owning relays")
+	}
+}
+
+func TestChannelEPGEnqueueFailureDoesNotFailPut(t *testing.T) {
+	srv, st, epgSvc := newTestServer(t)
+	ctx := context.Background()
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "G", URL: "http://example.com/epg.xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Live", UpstreamURL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, _ := st.ListRelayGroups(ctx, relay.ID)
+	if _, err := st.AddMembership(ctx, relay.ID, store.MembershipInput{ChannelID: ch.ID, GroupID: groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	epgSvc.CloseAdmission()
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Live", "logo_url": "", "upstream_url": ch.UpstreamURL, "headers": map[string]string{},
+		"epg_source_id": src.ID, "tvg_id": "live.id",
+	})
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/channels/"+ch.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("enqueue failure must not fail PUT: status=%d body=%s", res.StatusCode, b)
+	}
+	got, err := st.GetChannel(ctx, ch.ID)
+	if err != nil || got.TvgID != "live.id" {
+		t.Fatalf("binding must be saved: %+v err=%v", got, err)
+	}
+}
+
+func TestImportRelayFillPublishesRevision(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	rel := stream.NewManager(stream.Options{BufferSize: 64, IdleTimeout: 2 * time.Second})
+	t.Cleanup(func() { _ = rel.Close(context.Background()) })
+	epgSvc := epg.New(st, dir, 1<<20, nil)
+	staticFS, err := fs.Sub(static.Content, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not configured", 500)
+	}))
+	cfg := config.Config{
+		BaseURL:          srv.URL,
+		DataDir:          dir,
+		FFmpegPath:       "ffmpeg",
+		RelayBufferSize:  64,
+		RelayIdleTimeout: 2 * time.Second,
+		RelayConnTimeout: time.Second,
+		EPGMaxBytes:      1 << 20,
+		EPGDefaultEvery:  time.Hour,
+	}
+	api := httpapi.New(cfg, st, rel, epgSvc, nil, staticFS, nil)
+	srv.Config.Handler = api.Handler()
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+	src := seedCachedEPG(t, st, epgSvc, "Guide", `<?xml version="1.0"?><tv><channel id="a.id"><display-name>A</display-name></channel></tv>`)
+	ch, err := st.CreateChannel(ctx, store.ChannelInput{Name: "News", UpstreamURL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRev := ch.UpdatedAt.UTC().Format(time.RFC3339Nano)
+
+	playlist := fmt.Sprintf(`#EXTM3U url-tvg="%s"
+#EXTINF:-1 tvg-id="a.id" group-title="News",News
+http://example.com/a.ts
+`, src.URL)
+	body, _ := json.Marshal(map[string]any{
+		"content": playlist, "relay_name": "New", "relay_slug": "new", "import_epg": true,
+	})
+	res, err := http.Post(srv.URL+"/api/relays/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	fresh, err := st.GetChannel(ctx, ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.TvgID != "a.id" {
+		t.Fatalf("expected fill-blank: %+v", fresh)
+	}
+	stale := fresh.StreamSource()
+	stale.Revision = oldRev
+	if _, err := rel.Subscribe(ctx, fresh.ID, stale); !errors.Is(err, stream.ErrStaleRevision) {
+		t.Fatalf("want stale revision after fill publish, got %v", err)
 	}
 }
