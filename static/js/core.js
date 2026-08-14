@@ -206,7 +206,7 @@ const PAGE_META = {
   epgs: { title: "EPG Sources", desc: "Configure EPG feeds" },
   relays: { title: "Relays", desc: "Publish playlists and EPG feeds" },
   "epg-viewer": { title: "EPG Viewer", desc: "Review EPG data" },
-  settings: { title: "Settings", desc: "Appearance, transcoding profile, and system configuration" },
+  settings: { title: "Settings", desc: "System settings and configurations" },
 };
 
 async function api(path, options = {}) {

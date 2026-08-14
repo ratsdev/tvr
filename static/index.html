@@ -299,14 +299,18 @@
 
         <section id="tab-settings" class="tab-panel">
           <div class="settings-page">
-            <form id="settings-form" class="settings-stack">
-              <div class="settings-card">
-                <div class="settings-card-head">
-                  <div class="settings-card-title">
-                    <h2>Appearance</h2>
-                    <p class="muted">Sidebar title and a square image. Uploads are resized automatically.</p>
-                  </div>
-                  <button type="submit" class="primary">Save</button>
+            <form id="settings-form" class="settings-card">
+              <div class="settings-card-head">
+                <div class="settings-card-title">
+                  <h2>System Settings</h2>
+                  <p class="muted">Appearance and the transcoder profile.</p>
+                </div>
+                <button type="submit" class="primary" id="settings-save">Save</button>
+              </div>
+              <section class="settings-sub">
+                <div class="settings-sub-head">
+                  <h3>Appearance</h3>
+                  <p class="muted">Sidebar title and a square image. Uploads are resized automatically.</p>
                 </div>
                 <div class="settings-grid">
                   <label>Title<input id="settings-brand-title" maxlength="64" placeholder="IPTV Relay" /></label>
@@ -325,14 +329,11 @@
                   <input type="file" id="settings-brand-icon-file" class="hidden" accept="image/*" />
                 </div>
                 <p id="settings-brand-error" class="error"></p>
-              </div>
-              <div class="settings-card">
-                <div class="settings-card-head">
-                  <div class="settings-card-title">
-                    <h2>Transcoding</h2>
-                    <p class="muted">Used by Channels with Transcode enabled. <span id="settings-ffmpeg-status"></span></p>
-                  </div>
-                  <button type="submit" class="primary" id="settings-save">Save</button>
+              </section>
+              <section class="settings-sub">
+                <div class="settings-sub-head">
+                  <h3>Transcoding</h3>
+                  <p class="muted">Used by Channels with Transcode enabled. <span id="settings-ffmpeg-status"></span></p>
                 </div>
                 <div class="settings-grid">
                   <label>Video CRF<input id="settings-crf" type="number" min="0" max="51" step="1" required /></label>
@@ -354,13 +355,13 @@
                   <label>Startup timeout (seconds)<input id="settings-startup-timeout" type="number" min="1" max="300" step="1" required /></label>
                 </div>
                 <p id="settings-error" class="error"></p>
-              </div>
+              </section>
             </form>
 
             <section class="settings-card">
               <div class="settings-card-head">
                 <div class="settings-card-title">
-                  <h2>System configuration</h2>
+                  <h2>System Configurations</h2>
                   <p class="muted">Environment-owned startup settings (read-only).</p>
                 </div>
               </div>

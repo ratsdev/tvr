@@ -1058,11 +1058,6 @@ dialog form { display: grid; gap: 10px; }
   font-size: 12px;
 }
 #channel-policy-hint { margin: -4px 0 0; }
-.settings-stack {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
 .settings-page {
   display: grid;
   gap: 12px;
@@ -1094,14 +1089,26 @@ dialog form { display: grid; gap: 10px; }
 .settings-card-title {
   min-width: 0;
 }
-.settings-card-head h2 {
+.settings-card-head h2,
+.settings-sub-head h3 {
   margin: 0;
-  font-size: 15px;
 }
-.settings-card-head .muted {
+.settings-card-head h2 { font-size: 15px; }
+.settings-sub-head h3 { font-size: 13px; font-weight: 600; }
+.settings-card-head .muted,
+.settings-sub-head .muted {
   margin: 4px 0 0;
   font-size: 12px;
   line-height: 1.35;
+}
+.settings-sub {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-sub + .settings-sub {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 #settings-ffmpeg-status.warn {
   color: var(--danger);
