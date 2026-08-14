@@ -44,6 +44,29 @@ FROM proxies p`)
 	return out, nil
 }
 
+func findProxyByNameTx(ctx context.Context, q querier, name string) (Proxy, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Proxy{}, ErrNotFound
+	}
+	row := q.QueryRowContext(ctx, `
+SELECT p.id, p.name, p.policy, COALESCE(p.fixed_server_id, ''), p.created_at, p.updated_at,
+       (SELECT COUNT(DISTINCT u.channel_id) FROM channel_upstreams u WHERE u.proxy_id = p.id)
+FROM proxies p WHERE p.name = ? COLLATE NOCASE`, name)
+	p, err := scanProxy(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Proxy{}, ErrNotFound
+	}
+	if err != nil {
+		return Proxy{}, err
+	}
+	tmp := []Proxy{p}
+	if err := attachProxyServers(ctx, q, tmp); err != nil {
+		return Proxy{}, err
+	}
+	return tmp[0], nil
+}
+
 func (s *Store) GetProxy(ctx context.Context, id string) (Proxy, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {

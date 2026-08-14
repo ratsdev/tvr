@@ -252,6 +252,12 @@ func (s *Server) handleImportChannels(w http.ResponseWriter, r *http.Request) {
 	var warnings []string
 	ready := make([]store.ImportChannelEntry, 0, len(parsed))
 	for _, ent := range parsed {
+		if ent.ProxyName != "" {
+			ready = append(ready, store.ImportChannelEntry{
+				Name: ent.Name, URL: ent.URL, ProxyName: ent.ProxyName,
+			})
+			continue
+		}
 		if !m3u.IsHTTPStream(ent.URL) {
 			warnings = append(warnings, fmt.Sprintf("skipped non-http(s) url for %q", ent.Name))
 			continue

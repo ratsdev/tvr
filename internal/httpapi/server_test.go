@@ -1479,6 +1479,49 @@ func TestImportChannelsTXT(t *testing.T) {
 	}
 }
 
+func TestImportChannelsTXTProxied(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	p, err := st.CreateProxy(ctx, store.ProxyInput{
+		Name: "udpxy", Servers: []store.ProxyServer{{URL: "http://1.1.1.1:4022/udp/"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"content": "CCTV-1,239.1.2.3:1234@udpxy\n"})
+	res, err := http.Post(srv.URL+"/api/channels/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", res.StatusCode, raw)
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil || len(channels) != 1 {
+		t.Fatalf("channels=%+v err=%v", channels, err)
+	}
+	ch, err := st.GetChannel(ctx, channels[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ch.Upstreams) != 1 || ch.Upstreams[0].URL != "239.1.2.3:1234" || ch.Upstreams[0].ProxyID != p.ID {
+		t.Fatalf("upstreams=%+v", ch.Upstreams)
+	}
+
+	body, _ = json.Marshal(map[string]any{"content": "Other,239.1.2.3:1234@nope\n"})
+	res2, err := http.Post(srv.URL+"/api/channels/import", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	raw, _ = io.ReadAll(res2.Body)
+	if res2.StatusCode != http.StatusBadRequest || !strings.Contains(string(raw), "nope") {
+		t.Fatalf("unknown proxy status=%d body=%s", res2.StatusCode, raw)
+	}
+}
+
 func TestImportChannelsTXTMalformed(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	body, _ := json.Marshal(map[string]any{"content": "not-a-pair\n"})

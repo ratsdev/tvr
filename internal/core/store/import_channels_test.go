@@ -120,3 +120,105 @@ func TestImportChannelsAtomic(t *testing.T) {
 		t.Fatalf("failed import must leave no channels; channels=%+v err=%v", channels, err)
 	}
 }
+
+func TestImportChannelsProxied(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	p, err := st.CreateProxy(ctx, store.ProxyInput{
+		Name: "udpxy", Servers: []store.ProxyServer{{URL: "http://1.1.1.1:4022/udp/"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := st.ImportChannels(ctx, []store.ImportChannelEntry{
+		{Name: "CCTV-1", URL: "239.1.2.3:1234", ProxyName: "UDPXY"},
+		{Name: "News", URL: "http://example.com/news.ts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Created != 2 {
+		t.Fatalf("created=%d", out.Created)
+	}
+
+	channels, err := st.ListChannels(ctx)
+	if err != nil || len(channels) != 2 {
+		t.Fatalf("channels=%+v err=%v", channels, err)
+	}
+	var mcast store.Channel
+	for _, ch := range channels {
+		if ch.Name == "CCTV-1" {
+			mcast = ch
+		}
+	}
+	if len(mcast.Upstreams) != 1 || mcast.Upstreams[0].URL != "239.1.2.3:1234" || mcast.Upstreams[0].ProxyID != p.ID {
+		t.Fatalf("proxied=%+v", mcast.Upstreams)
+	}
+
+	again, err := st.ImportChannels(ctx, []store.ImportChannelEntry{
+		{Name: "CCTV-1", URL: "239.1.2.3:1234", ProxyName: "udpxy"},
+		{Name: "CCTV-1", URL: "239.1.2.4:1234", ProxyName: "udpxy"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Reused != 1 || again.UpstreamsAdded != 1 {
+		t.Fatalf("counts=%+v", again)
+	}
+	got, err := st.GetChannel(ctx, mcast.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Upstreams) != 2 {
+		t.Fatalf("upstreams=%+v", got.Upstreams)
+	}
+}
+
+func TestImportChannelsProxiedReusesJoinedPrimary(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateProxy(ctx, store.ProxyInput{
+		Name: "udpxy", Servers: []store.ProxyServer{{URL: "http://1.1.1.1:4022/udp/"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "Mcast", UpstreamURL: "http://1.1.1.1:4022/udp/239.1.2.3:1234",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := st.ImportChannels(ctx, []store.ImportChannelEntry{
+		{Name: "Other", URL: "239.1.2.3:1234", ProxyName: "udpxy"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Created != 0 || out.Reused != 0 || len(out.Warnings) != 1 {
+		t.Fatalf("counts=%+v warnings=%v", out, out.Warnings)
+	}
+	if !strings.Contains(out.Warnings[0], existing.Name) {
+		t.Fatalf("warnings=%v", out.Warnings)
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil || len(channels) != 1 {
+		t.Fatalf("channels=%+v err=%v", channels, err)
+	}
+}
+
+func TestImportChannelsUnknownProxyRejects(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	_, err := st.ImportChannels(ctx, []store.ImportChannelEntry{
+		{Name: "News", URL: "http://example.com/a.ts"},
+		{Name: "CCTV-1", URL: "239.1.2.3:1234", ProxyName: "missing"},
+	})
+	if err == nil || !errors.Is(err, store.ErrValidation) || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected unknown proxy, got %v", err)
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil || len(channels) != 0 {
+		t.Fatalf("rejected import must roll back; channels=%+v err=%v", channels, err)
+	}
+}

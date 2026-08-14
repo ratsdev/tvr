@@ -50,8 +50,9 @@ type ImportRelayResult struct {
 
 // ImportChannelEntry is one preclassified TXT row ready for persistence.
 type ImportChannelEntry struct {
-	Name string
-	URL  string
+	Name      string
+	URL       string
+	ProxyName string
 }
 
 // ImportChannelsResult summarizes a successful channel-list import.
@@ -165,7 +166,7 @@ INSERT INTO relay_groups (relay_id, name, sort_order) VALUES (?, ?, ?)`, relayID
 
 		for _, ent := range in.Entries {
 			srcID, tvg := resolveImportChannelEPG(ent, epgIDs)
-			ch, err := findChannelByUpstreamURLTx(ctx, tx, ent.UpstreamURL)
+			ch, err := findChannelByUpstreamURLTx(ctx, tx, ent.UpstreamURL, "")
 			if errors.Is(err, ErrNotFound) {
 				name := nextUniqueChannelName(takenNames, ent.Name)
 				chIn := ChannelInput{
@@ -260,10 +261,19 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 	var result ImportChannelsResult
 	updated := map[string]struct{}{}
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		proxies := map[string]Proxy{}
 		for _, ent := range entries {
 			name := strings.TrimSpace(ent.Name)
 			rawURL := strings.TrimSpace(ent.URL)
-			owner, err := findChannelByUpstreamURLTx(ctx, tx, rawURL)
+			proxyID, proxy, err := resolveImportProxy(ctx, tx, proxies, ent.ProxyName)
+			if err != nil {
+				return err
+			}
+			var proxyRef *Proxy
+			if proxyID != "" {
+				proxyRef = &proxy
+			}
+			owner, err := findImportChannel(ctx, tx, rawURL, proxyID, proxyRef)
 			if err == nil {
 				if channelNameKey(owner.Name) == channelNameKey(name) {
 					result.Reused++
@@ -277,7 +287,7 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 			}
 			existing, err := findChannelByNameTx(ctx, tx, name)
 			if err == nil {
-				added, err := appendChannelUpstreamTx(ctx, tx, existing.ID, rawURL)
+				added, err := appendChannelUpstreamTx(ctx, tx, existing.ID, rawURL, proxyID, proxyRef)
 				if err != nil {
 					return err
 				}
@@ -292,7 +302,8 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 			if !errors.Is(err, ErrNotFound) {
 				return err
 			}
-			if _, err := createChannelTx(ctx, tx, ChannelInput{Name: name, UpstreamURL: rawURL}); err != nil {
+			in := ChannelInput{Name: name, Upstreams: []ChannelUpstream{{URL: rawURL, ProxyID: proxyID}}}
+			if _, err := createChannelTx(ctx, tx, in); err != nil {
 				return err
 			}
 			result.Created++
@@ -309,6 +320,41 @@ func (s *Store) ImportChannels(ctx context.Context, entries []ImportChannelEntry
 	return result, nil
 }
 
+func resolveImportProxy(ctx context.Context, q querier, cache map[string]Proxy, name string) (string, Proxy, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", Proxy{}, nil
+	}
+	key := strings.ToLower(name)
+	if p, ok := cache[key]; ok {
+		return p.ID, p, nil
+	}
+	p, err := findProxyByNameTx(ctx, q, name)
+	if errors.Is(err, ErrNotFound) {
+		return "", Proxy{}, fmt.Errorf("%w: unknown proxy %q", ErrValidation, name)
+	}
+	if err != nil {
+		return "", Proxy{}, err
+	}
+	cache[key] = p
+	return p.ID, p, nil
+}
+
+func findImportChannel(ctx context.Context, q querier, rawURL, proxyID string, proxy *Proxy) (Channel, error) {
+	ch, err := findChannelByUpstreamURLTx(ctx, q, rawURL, proxyID)
+	if err == nil || !errors.Is(err, ErrNotFound) || proxy == nil {
+		return ch, err
+	}
+	item := ChannelUpstream{URL: rawURL, ProxyID: proxyID, proxy: snapshotProxy(*proxy)}
+	for _, ru := range resolvedForDedupe(item) {
+		ch, err = findChannelByUpstreamURLTx(ctx, q, ru, "")
+		if err == nil || !errors.Is(err, ErrNotFound) {
+			return ch, err
+		}
+	}
+	return Channel{}, ErrNotFound
+}
+
 func findChannelByNameTx(ctx context.Context, q querier, name string) (Channel, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+channelSelect+` FROM channels c WHERE name = ? LIMIT 1`, strings.TrimSpace(name))
 	ch, err := scanChannel(row)
@@ -318,19 +364,28 @@ func findChannelByNameTx(ctx context.Context, q querier, name string) (Channel, 
 	return ch, err
 }
 
-func appendChannelUpstreamTx(ctx context.Context, q querier, channelID, rawURL string) (bool, error) {
-	item, err := normalizeChannelUpstream(ChannelUpstream{URL: rawURL}, map[string]struct{}{})
+func appendChannelUpstreamTx(ctx context.Context, q querier, channelID, rawURL, proxyID string, proxy *Proxy) (bool, error) {
+	item, err := normalizeChannelUpstream(ChannelUpstream{URL: rawURL, ProxyID: proxyID}, map[string]struct{}{})
 	if err != nil {
 		return false, err
+	}
+	if proxy != nil && item.ProxyID != "" {
+		item.proxy = snapshotProxy(*proxy)
 	}
 	channels := []Channel{{ID: channelID}}
 	if err := attachChannelUpstreams(ctx, q, channels); err != nil {
 		return false, err
 	}
+	newResolved := resolvedForDedupe(item)
 	for _, u := range channels[0].Upstreams {
+		if u.URL == item.URL && u.ProxyID == item.ProxyID {
+			return false, nil
+		}
 		for _, ru := range resolvedForDedupe(u) {
-			if ru == item.URL {
-				return false, nil
+			for _, nu := range newResolved {
+				if ru == nu {
+					return false, nil
+				}
 			}
 		}
 	}
@@ -345,8 +400,8 @@ SELECT COALESCE(MAX(sort_order)+1, 0) FROM channel_upstreams WHERE channel_id = 
 	}
 	if _, err := q.ExecContext(ctx, `
 INSERT INTO channel_upstreams (id, channel_id, url, headers_json, sort_order, proxy_id)
-VALUES (?, ?, ?, ?, ?, NULL)`,
-		item.ID, channelID, item.URL, string(headersJSON), next); err != nil {
+VALUES (?, ?, ?, ?, ?, ?)`,
+		item.ID, channelID, item.URL, string(headersJSON), next, nullIfEmpty(item.ProxyID)); err != nil {
 		return false, channelConflictErr(err)
 	}
 	_, err = q.ExecContext(ctx, `UPDATE channels SET updated_at = ? WHERE id = ?`,
@@ -354,15 +409,27 @@ VALUES (?, ?, ?, ?, ?, NULL)`,
 	return true, err
 }
 
-func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL string) (Channel, error) {
+func findChannelByUpstreamURLTx(ctx context.Context, q querier, rawURL, proxyID string) (Channel, error) {
 	rawURL = strings.TrimSpace(rawURL)
-	row := q.QueryRowContext(ctx, `SELECT `+channelSelect+`
+	proxyID = strings.TrimSpace(proxyID)
+	var row *sql.Row
+	if proxyID == "" {
+		row = q.QueryRowContext(ctx, `SELECT `+channelSelect+`
 FROM channels c
 WHERE c.upstream_url = ?
    OR EXISTS (SELECT 1 FROM channel_upstreams u WHERE u.channel_id = c.id AND u.url = ? AND u.proxy_id IS NULL)
 ORDER BY CASE WHEN c.upstream_url = ? THEN 0 ELSE 1 END, c.id
 LIMIT 1`,
-		rawURL, rawURL, rawURL)
+			rawURL, rawURL, rawURL)
+	} else {
+		row = q.QueryRowContext(ctx, `SELECT `+channelSelect+`
+FROM channels c
+WHERE EXISTS (
+  SELECT 1 FROM channel_upstreams u
+  WHERE u.channel_id = c.id AND u.url = ? AND u.proxy_id = ?
+)
+LIMIT 1`, rawURL, proxyID)
+	}
 	ch, err := scanChannel(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, ErrNotFound
