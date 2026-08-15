@@ -202,15 +202,29 @@ function wireProxies() {
   document.getElementById("proxy-list").addEventListener("click", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
-    if (t.dataset.selectProxy) return;
+    const ids = filteredProxies().map((p) => p.id);
+    if (t.dataset.selectProxy) {
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      applyListSelect("proxies", ids, t.dataset.selectProxy, { shift: true });
+      syncProxySelectionDOM();
+      return;
+    }
     const item = t.closest("[data-open-proxy]");
-    if (item) selectProxy(item.dataset.openProxy);
+    if (!item) return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      applyListSelect("proxies", ids, item.dataset.openProxy, { shift: true });
+      syncProxySelectionDOM();
+      return;
+    }
+    state.lastChecked.proxies = item.dataset.openProxy;
+    selectProxy(item.dataset.openProxy);
   });
   document.getElementById("proxy-list").addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || !t.dataset.selectProxy) return;
-    if (t.checked) state.selected.proxies.add(t.dataset.selectProxy);
-    else state.selected.proxies.delete(t.dataset.selectProxy);
+    applyListSelect("proxies", filteredProxies().map((p) => p.id), t.dataset.selectProxy, { checked: t.checked });
     syncProxySelectionDOM();
   });
   document.getElementById("btn-proxy-select-all").addEventListener("click", () => {
@@ -219,6 +233,7 @@ function wireProxies() {
   });
   document.getElementById("btn-clear-proxies").addEventListener("click", () => {
     state.selected.proxies.clear();
+    state.lastChecked.proxies = null;
     syncProxySelectionDOM();
   });
   document.getElementById("btn-del-proxies").addEventListener("click", async () => {

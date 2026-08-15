@@ -25,6 +25,7 @@ const state = {
     relays: new Set(),
     members: new Set(),
   },
+  lastChecked: { channels: null, epgs: null, proxies: null, relays: null, members: null },
   channelTest: {}, // id -> "ok" | "fail" | "testing"
   testingAllChannels: false,
   gens: {
@@ -397,6 +398,27 @@ function pruneSelection(key, validIds) {
   for (const id of [...set]) {
     if (!validIds.has(id)) set.delete(id);
   }
+  if (state.lastChecked[key] != null && !validIds.has(state.lastChecked[key])) state.lastChecked[key] = null;
+}
+
+function applyListSelect(key, orderedIds, id, { shift = false, checked = true } = {}) {
+  const set = state.selected[key];
+  if (shift) {
+    const from = state.lastChecked[key] == null ? -1 : orderedIds.indexOf(state.lastChecked[key]);
+    const to = orderedIds.indexOf(id);
+    if (from >= 0 && to >= 0) {
+      const lo = Math.min(from, to);
+      const hi = Math.max(from, to);
+      for (let i = lo; i <= hi; i++) set.add(orderedIds[i]);
+      return;
+    }
+    set.add(id);
+  } else if (checked) {
+    set.add(id);
+  } else {
+    set.delete(id);
+  }
+  state.lastChecked[key] = id;
 }
 
 function updateBulkBar(key, barId, countId) {

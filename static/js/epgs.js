@@ -166,16 +166,29 @@ function wireEPGs() {
   document.getElementById("epg-list").addEventListener("click", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
-    if (t.dataset.selectEpg) return;
+    const ids = filteredEPGs().map((x) => x.id);
+    if (t.dataset.selectEpg) {
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      applyListSelect("epgs", ids, Number(t.dataset.selectEpg), { shift: true });
+      syncEPGSelectionDOM();
+      return;
+    }
     const item = t.closest("[data-open-epg]");
-    if (item) selectEPG(Number(item.dataset.openEpg));
+    if (!item) return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      applyListSelect("epgs", ids, Number(item.dataset.openEpg), { shift: true });
+      syncEPGSelectionDOM();
+      return;
+    }
+    state.lastChecked.epgs = Number(item.dataset.openEpg);
+    selectEPG(Number(item.dataset.openEpg));
   });
   document.getElementById("epg-list").addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || !t.dataset.selectEpg) return;
-    const id = Number(t.dataset.selectEpg);
-    if (t.checked) state.selected.epgs.add(id);
-    else state.selected.epgs.delete(id);
+    applyListSelect("epgs", filteredEPGs().map((x) => x.id), Number(t.dataset.selectEpg), { checked: t.checked });
     syncEPGSelectionDOM();
   });
   document.getElementById("btn-epg-select-all").addEventListener("click", () => {
@@ -184,6 +197,7 @@ function wireEPGs() {
   });
   document.getElementById("btn-clear-epgs").addEventListener("click", () => {
     state.selected.epgs.clear();
+    state.lastChecked.epgs = null;
     syncEPGSelectionDOM();
   });
   document.getElementById("btn-del-epgs").addEventListener("click", async () => {

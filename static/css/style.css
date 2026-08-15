@@ -255,6 +255,7 @@ main {
   border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
+  user-select: none;
 }
 .master-item .item-main {
   display: grid;

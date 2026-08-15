@@ -266,6 +266,11 @@ function channelsNotInRelay(channelIds, relayId) {
 
 async function finishMemberSave(relayId, title, body = "") {
   document.getElementById("member-dialog").close();
+  if (memberDialogChannelIDs.length) {
+    state.selected.channels.clear();
+    state.lastChecked.channels = null;
+    memberDialogChannelIDs = [];
+  }
   if (state.currentRelay?.id === relayId) await refreshRelayLineup();
   await loadChannels();
   toast.success(title, body);
@@ -353,16 +358,29 @@ function wireRelays() {
   document.getElementById("relay-list").addEventListener("click", async (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
-    if (t.dataset.selectRelay) return;
+    const ids = filteredRelays().map((r) => r.id);
+    if (t.dataset.selectRelay) {
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      applyListSelect("relays", ids, Number(t.dataset.selectRelay), { shift: true });
+      syncRelaySelectionDOM();
+      return;
+    }
     const item = t.closest("[data-open-relay]");
-    if (item) await openRelayEditor(item.dataset.openRelay);
+    if (!item) return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      applyListSelect("relays", ids, Number(item.dataset.openRelay), { shift: true });
+      syncRelaySelectionDOM();
+      return;
+    }
+    state.lastChecked.relays = Number(item.dataset.openRelay);
+    await openRelayEditor(item.dataset.openRelay);
   });
   document.getElementById("relay-list").addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || !t.dataset.selectRelay) return;
-    const id = Number(t.dataset.selectRelay);
-    if (t.checked) state.selected.relays.add(id);
-    else state.selected.relays.delete(id);
+    applyListSelect("relays", filteredRelays().map((r) => r.id), Number(t.dataset.selectRelay), { checked: t.checked });
     syncRelaySelectionDOM();
   });
   document.getElementById("btn-relay-select-all").addEventListener("click", () => {
@@ -371,6 +389,7 @@ function wireRelays() {
   });
   document.getElementById("btn-clear-relays").addEventListener("click", () => {
     state.selected.relays.clear();
+    state.lastChecked.relays = null;
     syncRelaySelectionDOM();
   });
   document.getElementById("btn-del-relays").addEventListener("click", async () => {
@@ -456,6 +475,7 @@ function wireRelays() {
   });
   document.getElementById("btn-clear-members").addEventListener("click", () => {
     state.selected.members.clear();
+    state.lastChecked.members = null;
     syncMemberSelectionDOM();
   });
   document.getElementById("btn-del-members").addEventListener("click", async () => {
@@ -554,14 +574,21 @@ function wireRelays() {
   document.getElementById("relay-lineup").addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || !t.dataset.selectMember) return;
-    const id = Number(t.dataset.selectMember);
-    if (t.checked) state.selected.members.add(id);
-    else state.selected.members.delete(id);
+    const ids = [...document.querySelectorAll("#relay-lineup input[data-select-member]")].map((cb) => Number(cb.dataset.selectMember));
+    applyListSelect("members", ids, Number(t.dataset.selectMember), { checked: t.checked });
     syncMemberSelectionDOM();
   });
   document.getElementById("relay-lineup").addEventListener("click", async (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement) || !state.currentRelay) return;
+    if (t.dataset.selectMember) {
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      const ids = [...document.querySelectorAll("#relay-lineup input[data-select-member]")].map((cb) => Number(cb.dataset.selectMember));
+      applyListSelect("members", ids, Number(t.dataset.selectMember), { shift: true });
+      syncMemberSelectionDOM();
+      return;
+    }
     const toggle = t.closest("[data-toggle-group]");
     if (toggle) {
       const id = Number(toggle.dataset.toggleGroup);

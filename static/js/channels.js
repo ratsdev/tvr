@@ -568,16 +568,29 @@ function wireChannels() {
   document.getElementById("channel-list").addEventListener("click", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
-    if (t.dataset.selectChannel) return;
+    const ids = filteredChannels().map((c) => c.id);
+    if (t.dataset.selectChannel) {
+      if (!e.shiftKey) return;
+      e.preventDefault();
+      applyListSelect("channels", ids, t.dataset.selectChannel, { shift: true });
+      syncChannelSelectionDOM();
+      return;
+    }
     const item = t.closest("[data-open-channel]");
-    if (item) selectChannel(item.dataset.openChannel);
+    if (!item) return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      applyListSelect("channels", ids, item.dataset.openChannel, { shift: true });
+      syncChannelSelectionDOM();
+      return;
+    }
+    state.lastChecked.channels = item.dataset.openChannel;
+    selectChannel(item.dataset.openChannel);
   });
   document.getElementById("channel-list").addEventListener("change", (e) => {
     const t = e.target;
     if (!(t instanceof HTMLInputElement) || !t.dataset.selectChannel) return;
-    const id = t.dataset.selectChannel;
-    if (t.checked) state.selected.channels.add(id);
-    else state.selected.channels.delete(id);
+    applyListSelect("channels", filteredChannels().map((c) => c.id), t.dataset.selectChannel, { checked: t.checked });
     syncChannelSelectionDOM();
   });
   document.getElementById("btn-channel-select-all").addEventListener("click", () => {
@@ -586,6 +599,7 @@ function wireChannels() {
   });
   document.getElementById("btn-clear-channels").addEventListener("click", () => {
     state.selected.channels.clear();
+    state.lastChecked.channels = null;
     syncChannelSelectionDOM();
   });
   document.getElementById("btn-add-channels-to-relay").addEventListener("click", async () => {
