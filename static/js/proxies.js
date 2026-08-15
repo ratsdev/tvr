@@ -275,7 +275,7 @@ function wireProxies() {
   });
   document.getElementById("btn-del-proxy").addEventListener("click", async () => {
     const id = state.selectedProxyId;
-    if (!id || !confirm("Delete this Proxy?")) return;
+    if (!id || !await askConfirm("Delete this Proxy?")) return;
     try {
       await api(`/api/proxies/${id}`, { method: "DELETE" });
       applyProxyDeletes([id]);

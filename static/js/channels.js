@@ -706,7 +706,7 @@ function wireChannels() {
   });
   document.getElementById("btn-del-channel").addEventListener("click", async () => {
     const id = state.selectedChannelId;
-    if (!id || !confirm("Delete this Channel?")) return;
+    if (!id || !await askConfirm("Delete this Channel?")) return;
     try {
       await api(`/api/channels/${id}`, { method: "DELETE" });
       applyChannelDeletes([id]);

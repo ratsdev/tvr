@@ -213,7 +213,7 @@ function wireEPGs() {
   });
   document.getElementById("btn-del-epg").addEventListener("click", async () => {
     const id = state.selectedEPGId;
-    if (!id || !confirm("Delete this EPG Source?")) return;
+    if (!id || !await askConfirm("Delete this EPG Source?")) return;
     try {
       await api(`/api/epg/sources/${id}`, { method: "DELETE" });
       applyEPGDeletes([id]);

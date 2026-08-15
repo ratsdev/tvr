@@ -405,9 +405,24 @@ function updateBulkBar(key, barId, countId) {
   document.getElementById(countId).textContent = `${n} selected`;
 }
 
+function askConfirm(title, ok = "Delete") {
+  const dlg = document.getElementById("confirm-dialog");
+  if (dlg.open) return Promise.resolve(false);
+  document.getElementById("confirm-title").textContent = title;
+  document.getElementById("confirm-ok").textContent = ok;
+  return new Promise((resolve) => {
+    const onClose = () => {
+      dlg.removeEventListener("close", onClose);
+      resolve(dlg.returnValue === "ok");
+    };
+    dlg.addEventListener("close", onClose);
+    dlg.showModal();
+  });
+}
+
 async function bulkDelete(label, ids, deleteOne) {
   if (!ids.length) return null;
-  if (!confirm(`Delete ${ids.length} ${label}?`)) return null;
+  if (!await askConfirm(`Delete ${ids.length} ${label}?`)) return null;
   const loading = toast.loading(`Deleting ${ids.length} ${label}…`);
   const successfulIDs = [];
   const failures = [];

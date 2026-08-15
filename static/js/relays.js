@@ -372,7 +372,7 @@ function wireRelays() {
     copyText("EPG", url);
   });
   document.getElementById("btn-del-relay").addEventListener("click", async () => {
-    if (!state.currentRelay || !confirm("Delete this Relay?")) return;
+    if (!state.currentRelay || !await askConfirm("Delete this Relay?")) return;
     try {
       const id = state.currentRelay.id;
       await api(`/api/relays/${id}`, { method: "DELETE" });
@@ -526,7 +526,7 @@ function wireRelays() {
       const g = state.currentRelay.groups.find((x) => String(x.id) === t.dataset.renameGroup);
       if (g) openGroupDialog(g);
     } else if (t.dataset.delGroup) {
-      if (!confirm("Delete Group?")) return;
+      if (!await askConfirm("Delete Group?")) return;
       try {
         const groupId = t.dataset.delGroup;
         await api(`/api/relays/${state.currentRelay.id}/groups/${groupId}`, { method: "DELETE" });
@@ -542,7 +542,7 @@ function wireRelays() {
       const m = state.currentRelay.memberships.find((x) => String(x.id) === t.dataset.editMember);
       await openMemberDialog(m);
     } else if (t.dataset.delMember) {
-      if (!confirm("Remove Channel from Relay?")) return;
+      if (!await askConfirm("Remove Channel from Relay?", "Remove")) return;
       try {
         await api(`/api/relays/${state.currentRelay.id}/memberships/${t.dataset.delMember}`, { method: "DELETE" });
         state.selected.members.delete(Number(t.dataset.delMember));
