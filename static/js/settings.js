@@ -179,6 +179,86 @@ function wireSettings() {
       toast.error("Save failed", err.message);
     }
   });
+  document.getElementById("btn-backup-download").addEventListener("click", downloadLibraryBackup);
+  onFilePick(document.getElementById("btn-backup-restore"), document.getElementById("backup-restore-file"), restoreLibraryBackup);
+}
+
+async function downloadLibraryBackup() {
+  const errEl = document.getElementById("backup-error");
+  errEl.textContent = "";
+  const loading = toast.loading("Preparing backup…");
+  try {
+    const res = await fetch("/api/backup");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || res.statusText || "request failed");
+    }
+    const blob = await res.blob();
+    const match = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+    const name = match?.[1] || "tvr-library.json";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    loading.update("success", "Backup downloaded", name);
+  } catch (err) {
+    errEl.textContent = err.message;
+    loading.update("error", "Backup failed", err.message);
+  }
+}
+
+function resetLibraryView() {
+  for (const key of Object.keys(state.selected)) {
+    state.selected[key].clear();
+    state.lastChecked[key] = null;
+  }
+  state.selectedChannelId = null;
+  state.selectedRelayId = null;
+  state.selectedProxyId = null;
+  state.selectedEPGId = null;
+  state.currentRelay = null;
+  state.creatingChannel = false;
+  state.creatingProxy = false;
+  state.creatingEPG = false;
+  state.editors.channel.baseline = null;
+  state.editors.relayMeta.baseline = null;
+  state.editors.proxy.baseline = null;
+  state.editors.epg.baseline = null;
+  state.channelTest = {};
+  state.collapsedGroups.clear();
+  state.dragMemberId = null;
+  state.dragGroupId = null;
+}
+
+async function restoreLibraryBackup(file) {
+  const errEl = document.getElementById("backup-error");
+  errEl.textContent = "";
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    errEl.textContent = "File is not valid JSON";
+    toast.error("Restore failed", "File is not valid JSON");
+    return;
+  }
+  if (!await askConfirm("Replace Channels, Relays, Proxies, and EPG Sources with this backup? System settings are kept.", "Restore")) return;
+  const loading = toast.loading("Restoring library…");
+  try {
+    const res = await api("/api/backup/restore", { method: "POST", body: JSON.stringify(data) });
+    resetLibraryView();
+    const summary = `${res.channels} channels, ${res.relays} relays, ${res.proxies} proxies, ${res.epg_sources} EPG sources`;
+    loading.update("success", "Library restored", res.warning || summary);
+    try {
+      await Promise.all([loadChannels(), loadRelays(), loadProxies(), loadEPG()]);
+    } catch (err) {
+      toast.error("Reload failed", err.message);
+    }
+  } catch (err) {
+    errEl.textContent = err.message;
+    loading.update("error", "Restore failed", err.message);
+  }
 }
 
 function readFileAsDataURL(file) {

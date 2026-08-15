@@ -127,6 +127,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	s.mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	s.mux.HandleFunc("GET /api/backup", s.handleExportBackup)
+	s.mux.HandleFunc("POST /api/backup/restore", s.handleRestoreBackup)
 	s.mux.HandleFunc("GET /brand-icon", s.handleGetBrandIcon)
 
 	s.mux.HandleFunc("GET /r/{slug}/playlist.m3u", s.handleRelayPlaylist)
@@ -294,9 +296,15 @@ func writeLiveUpdateTimeout(w http.ResponseWriter, saved string, err error) {
 }
 
 func decodeJSON(r *http.Request, dst any) error {
+	return decodeJSONBody(r, dst, 8<<20, true)
+}
+
+func decodeJSONBody(r *http.Request, dst any, maxBytes int64, strict bool) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(io.LimitReader(r.Body, 8<<20))
-	dec.DisallowUnknownFields()
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxBytes))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	return dec.Decode(dst)
 }
 

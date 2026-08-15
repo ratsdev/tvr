@@ -440,6 +440,35 @@
             <section class="settings-card">
               <div class="settings-card-head">
                 <div class="settings-card-title">
+                  <h2>Backup & Restore</h2>
+                  <p class="muted">Library data only. System settings are not included.</p>
+                </div>
+              </div>
+              <section class="settings-sub">
+                <div class="settings-sub-head">
+                  <h3>Backup</h3>
+                  <p class="muted">Save Channels, Relays, Proxies, and EPG Sources as a JSON file.</p>
+                </div>
+                <div>
+                  <button type="button" id="btn-backup-download">Download</button>
+                </div>
+              </section>
+              <section class="settings-sub">
+                <div class="settings-sub-head">
+                  <h3>Restore</h3>
+                  <p class="muted">Replace the current library with a backup file. This cannot be undone.</p>
+                </div>
+                <div>
+                  <button type="button" class="primary" id="btn-backup-restore">Upload</button>
+                </div>
+                <input type="file" id="backup-restore-file" class="hidden" accept="application/json,.json" />
+              </section>
+              <p id="backup-error" class="error"></p>
+            </section>
+
+            <section class="settings-card">
+              <div class="settings-card-head">
+                <div class="settings-card-title">
                   <h2>System Configurations</h2>
                   <p class="muted">Environment-owned startup settings (read-only).</p>
                 </div>

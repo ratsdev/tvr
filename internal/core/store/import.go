@@ -438,6 +438,10 @@ LIMIT 1`, rawURL, proxyID)
 }
 
 func createChannelTx(ctx context.Context, q querier, in ChannelInput) (Channel, error) {
+	return insertChannelTx(ctx, q, uuid.NewString(), in)
+}
+
+func insertChannelTx(ctx context.Context, q querier, id string, in ChannelInput) (Channel, error) {
 	if err := validateChannelInput(in); err != nil {
 		return Channel{}, err
 	}
@@ -458,7 +462,6 @@ func createChannelTx(ctx context.Context, q querier, in ChannelInput) (Channel, 
 	if err := ensureEPGSourceExists(ctx, q, epgID); err != nil {
 		return Channel{}, err
 	}
-	id := uuid.NewString()
 	_, err = q.ExecContext(ctx, `
 INSERT INTO channels (id, name, logo_url, upstream_url, headers_json, transcode_enabled, upstream_policy, fixed_upstream_id, epg_source_id, tvg_id, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

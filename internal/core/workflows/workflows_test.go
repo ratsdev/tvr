@@ -206,3 +206,36 @@ func TestImportRelayFillRebuildsOwningRelays(t *testing.T) {
 		t.Fatal("fill-blank should rebuild owning relays")
 	}
 }
+
+func TestRestoreLibraryQueuesRebuildAndCleanup(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "tvr.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	epgSvc := epg.New(st, t.TempDir(), 1<<20, nil)
+	wf := &workflows.Workflows{Store: st, EPG: epgSvc, DefaultEPGInterval: time.Hour}
+
+	if _, err := st.CreateChannel(ctx, store.ChannelInput{Name: "News", UpstreamURL: "http://example.com/news.ts"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := st.ExportLibrary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRelay(ctx, store.RelayInput{Name: "Other", Slug: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = epgSvc.DrainPending(ctx)
+
+	if _, err := wf.RestoreLibrary(ctx, snap); err != nil {
+		t.Fatal(err)
+	}
+	if !epgSvc.Status().Refreshing {
+		t.Fatal("restore should queue playlist rebuild and slug cleanup")
+	}
+}

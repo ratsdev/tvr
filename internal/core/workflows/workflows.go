@@ -291,3 +291,36 @@ func (w *Workflows) ImportRelay(ctx context.Context, in store.ImportRelayInput) 
 	})
 	return imported, err
 }
+
+// RestoreLibrary replaces the library, then rebuilds playlists/EPG for the new set.
+func (w *Workflows) RestoreLibrary(ctx context.Context, in store.LibraryBackup) (store.LibraryRestoreResult, error) {
+	var result store.LibraryRestoreResult
+	err := w.withAdmission(func() error {
+		var err error
+		result, err = w.Store.RestoreLibrary(ctx, in)
+		if err != nil {
+			return err
+		}
+		_ = w.ApplyDerivedWork(ctx, restoreDerivedWork(result))
+		return nil
+	})
+	return result, err
+}
+
+func restoreDerivedWork(result store.LibraryRestoreResult) DerivedWork {
+	ids := make([]int64, 0, len(result.RestoredRelays))
+	for _, r := range result.RestoredRelays {
+		ids = append(ids, r.ID)
+	}
+	cleanups := make([]RelaySlugCleanup, 0, len(result.RemovedRelays))
+	for _, r := range result.RemovedRelays {
+		cleanups = append(cleanups, RelaySlugCleanup{RelayID: r.ID, OldSlug: r.Slug})
+	}
+	return DerivedWork{
+		InvalidateSources: result.OldEPGSourceIDs,
+		DeleteSourceFiles: result.OldEPGSourceIDs,
+		RefreshSources:    result.RefreshEPGSourceIDs,
+		RebuildRelays:     ids,
+		CleanupRelaySlugs: cleanups,
+	}
+}

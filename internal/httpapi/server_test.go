@@ -1894,3 +1894,78 @@ http://example.com/a.ts
 		t.Fatalf("want stale revision after fill publish, got %v", err)
 	}
 }
+
+func TestLibraryBackupExportRestore(t *testing.T) {
+	srv, st, _ := newTestServer(t)
+	ctx := context.Background()
+	proxy, err := st.CreateProxy(ctx, store.ProxyInput{
+		Name: "Edge", Servers: []store.ProxyServer{{URL: "http://1.2.3.4:8080/"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := st.CreateEPGSource(ctx, store.EPGSourceInput{Name: "Guide", URL: "http://epg.example/xml"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvg := "ch1"
+	keep, err := st.CreateChannel(ctx, store.ChannelInput{
+		Name: "News", UpstreamURL: "http://example.com/news.ts", EPGSourceID: &src.ID, TvgID: &tvg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRelay(ctx, store.RelayInput{Name: "Home", Slug: "home"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := http.Get(srv.URL + "/api/backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("export status=%d body=%s", res.StatusCode, raw)
+	}
+	if !strings.Contains(res.Header.Get("Content-Disposition"), "tvr-library-") {
+		t.Fatalf("disposition=%q", res.Header.Get("Content-Disposition"))
+	}
+
+	if _, err := st.CreateChannel(ctx, store.ChannelInput{Name: "Temp", UpstreamURL: "http://example.com/temp.ts"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = http.Post(srv.URL+"/api/backup/restore", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", res.StatusCode, body)
+	}
+	var out store.LibraryRestoreResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Channels != 1 || out.Relays != 1 || out.Proxies != 1 || out.EPGSources != 1 {
+		t.Fatalf("restore=%+v", out)
+	}
+	channels, err := st.ListChannels(ctx)
+	if err != nil || len(channels) != 1 || channels[0].ID != keep.ID || channels[0].EPGSourceID == nil || *channels[0].EPGSourceID != src.ID {
+		t.Fatalf("channels=%+v err=%v", channels, err)
+	}
+	relays, err := st.ListRelays(ctx)
+	if err != nil || len(relays) != 1 || relays[0].Slug != "home" {
+		t.Fatalf("relays=%+v err=%v", relays, err)
+	}
+	proxies, err := st.ListProxies(ctx)
+	if err != nil || len(proxies) != 1 || proxies[0].ID != proxy.ID {
+		t.Fatalf("proxies=%+v err=%v", proxies, err)
+	}
+	epgs, err := st.ListEPGSources(ctx)
+	if err != nil || len(epgs) != 1 || epgs[0].ID != src.ID {
+		t.Fatalf("epgs=%+v err=%v", epgs, err)
+	}
+}
