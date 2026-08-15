@@ -74,6 +74,31 @@ func TestBuildArgsLiveMPEGTSTiming(t *testing.T) {
 	}
 }
 
+func TestBuildArgsPlayerCompatible(t *testing.T) {
+	args, err := BuildArgs(DefaultProfile(), upstream.Upstream{URL: "http://example.com/a.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := args[indexOf(args, "-profile:v")+1]; got != "main" {
+		t.Fatalf("profile=%q", got)
+	}
+	if got := args[indexOf(args, "-bf")+1]; got != "0" {
+		t.Fatalf("bf=%q", got)
+	}
+	if got := args[indexOf(args, "-x264-params")+1]; !strings.Contains(got, "repeat-headers=1") {
+		t.Fatalf("x264-params=%q", got)
+	}
+	if got := args[indexOf(args, "-bsf:v")+1]; got != "dump_extra" {
+		t.Fatalf("bsf=%q", got)
+	}
+	if got := args[indexOf(args, "-ar")+1]; got != "48000" {
+		t.Fatalf("ar=%q", got)
+	}
+	if got := args[indexOf(args, "-ac")+1]; got != "2" {
+		t.Fatalf("ac=%q", got)
+	}
+}
+
 func TestBuildArgsEvenScaleWithoutCap(t *testing.T) {
 	args, err := BuildArgs(DefaultProfile(), upstream.Upstream{URL: "http://example.com/a.ts"})
 	if err != nil {

@@ -56,3 +56,20 @@ func PID(pkt []byte) uint16 {
 func HasPUSI(pkt []byte) bool {
 	return len(pkt) > 1 && pkt[1]&0x40 != 0
 }
+
+// HasRandomAccess reports the MPEG-TS adaptation-field random_access_indicator.
+// ffmpeg's mpegts muxer sets this on video keyframes.
+func HasRandomAccess(pkt []byte) bool {
+	if len(pkt) < 6 || pkt[0] != SyncByte {
+		return false
+	}
+	afc := (pkt[3] >> 4) & 0x3
+	if afc != 2 && afc != 3 {
+		return false
+	}
+	afLen := int(pkt[4])
+	if afLen < 1 || 5+afLen > len(pkt) {
+		return false
+	}
+	return pkt[5]&0x40 != 0
+}

@@ -14,9 +14,10 @@ import (
 )
 
 type viewer struct {
-	id     int64
-	ch     chan []byte
-	closed atomic.Bool
+	id           int64
+	ch           chan []byte
+	closed       atomic.Bool
+	waitKeyframe bool
 }
 
 type session struct {
@@ -43,6 +44,7 @@ type session struct {
 	connected           time.Time
 	pat                 []byte
 	pmts                map[uint16][]byte
+	seenRAI             bool
 	pumpCancel          context.CancelFunc
 	stopCh              chan struct{}
 	doneCh              chan struct{}
@@ -105,6 +107,7 @@ func (s *session) applyCurrentUpstreamLocked() {
 	s.upstream = up
 	s.pat = nil
 	s.pmts = make(map[uint16][]byte)
+	s.seenRAI = false
 }
 
 func (s *session) advanceIndex() {
@@ -219,7 +222,13 @@ func (s *session) addViewer(bufferSize int) *viewer {
 	}
 	s.viewers[v.id] = v
 
-	// Late joiners get cached PAT/PMT first.
+	// Transcoded late joiners wait for a keyframe and get PAT/PMT with it.
+	// Pass-through keeps the old PAT/PMT-then-live behavior so a one-shot RAI
+	// cannot stall the viewer until the next (possibly never) random-access packet.
+	if s.source.Transcode && s.everReady.Load() && s.seenRAI {
+		v.waitKeyframe = true
+		return v
+	}
 	startup := s.startupPacketsLocked()
 	if len(startup) > 0 {
 		select {

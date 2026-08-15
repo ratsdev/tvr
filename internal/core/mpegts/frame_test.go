@@ -23,3 +23,29 @@ func TestExtractFramedKeepsValidPrefix(t *testing.T) {
 		t.Fatalf("Framed valid=%v len=%d", valid, len(ok))
 	}
 }
+
+func TestHasRandomAccess(t *testing.T) {
+	payloadOnly := make([]byte, PacketSize)
+	payloadOnly[0] = SyncByte
+	payloadOnly[3] = 0x10
+	if HasRandomAccess(payloadOnly) {
+		t.Fatal("payload-only packet must not report RAI")
+	}
+
+	rai := make([]byte, PacketSize)
+	rai[0] = SyncByte
+	rai[3] = 0x30 // adaptation + payload
+	rai[4] = 1
+	rai[5] = 0x40 // random_access_indicator
+	if !HasRandomAccess(rai) {
+		t.Fatal("expected RAI")
+	}
+
+	emptyAF := make([]byte, PacketSize)
+	emptyAF[0] = SyncByte
+	emptyAF[3] = 0x30
+	emptyAF[4] = 0
+	if HasRandomAccess(emptyAF) {
+		t.Fatal("zero-length adaptation field has no RAI")
+	}
+}

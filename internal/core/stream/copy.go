@@ -101,13 +101,20 @@ func (s *session) observePacket(pkt []byte) {
 	if len(pkt) != mpegts.PacketSize || pkt[0] != mpegts.SyncByte {
 		return
 	}
-	if !mpegts.HasPUSI(pkt) {
+	rai := mpegts.HasRandomAccess(pkt)
+	if !mpegts.HasPUSI(pkt) && !rai {
 		return
 	}
 	pid := mpegts.PID(pkt)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if rai {
+		s.seenRAI = true
+	}
+	if !mpegts.HasPUSI(pkt) {
+		return
+	}
 	if pid == patPID {
 		s.pat = append([]byte(nil), pkt...)
 		return
@@ -148,13 +155,35 @@ func (s *session) startupPacketsLocked() []byte {
 	return out
 }
 
+func keyframeSuffix(data []byte) ([]byte, bool) {
+	for i := 0; i+mpegts.PacketSize <= len(data); i += mpegts.PacketSize {
+		if mpegts.HasRandomAccess(data[i : i+mpegts.PacketSize]) {
+			return data[i:], true
+		}
+	}
+	return nil, false
+}
+
 func (s *session) broadcast(pkt []byte) {
 	s.mu.Lock()
 	s.bytesSent += int64(len(pkt))
 	var cancel context.CancelFunc
 	for id, v := range s.viewers {
+		out := pkt
+		if v.waitKeyframe {
+			cut, ok := keyframeSuffix(pkt)
+			if !ok {
+				continue
+			}
+			v.waitKeyframe = false
+			if startup := s.startupPacketsLocked(); len(startup) > 0 {
+				out = append(startup, cut...)
+			} else {
+				out = cut
+			}
+		}
 		select {
-		case v.ch <- pkt:
+		case v.ch <- out:
 		default:
 			// Slow client: drop them so they don't block the upstream.
 			s.opts.Logger.Debug("dropping slow viewer", "channel_id", s.channelID, "viewer_id", id)
