@@ -774,7 +774,7 @@ textarea { resize: vertical; min-height: 64px; }
 .group-members .empty-list { padding: 12px 8px; }
 .member {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto auto 1fr auto;
   gap: 6px;
   align-items: center;
   padding: 8px 10px;

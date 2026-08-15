@@ -114,6 +114,7 @@ function renderLineup() {
           return `<div class="member ${selected}" draggable="true" data-member-id="${m.id}" data-group-id="${g.id}">
             <input type="checkbox" data-select-member="${m.id}" ${checked} />
             <span class="handle">⋮⋮</span>
+            ${logoHTML(m.logo_url || ch?.logo_url)}
             <div>
               <div class="member-title">#${esc(m.number)} · ${esc(m.channel_name)}</div>
               <div class="sub">${esc(membershipEPGLine(srcName, ch?.tvg_id))}</div>
