@@ -588,6 +588,11 @@ function wireChannels() {
     state.selected.channels.clear();
     syncChannelSelectionDOM();
   });
+  document.getElementById("btn-add-channels-to-relay").addEventListener("click", async () => {
+    const ids = [...state.selected.channels];
+    if (!ids.length) return;
+    await openMemberDialog(null, ids);
+  });
   document.getElementById("btn-del-channels").addEventListener("click", async () => {
     const ids = [...state.selected.channels];
     const res = await bulkDelete("channel(s)", ids, (id) => api(`/api/channels/${id}`, { method: "DELETE" }));

@@ -228,6 +228,7 @@ async function dropGroup(dragId, beforeId) {
 }
 
 const MEMBER_NEW_GROUP = "__new__";
+let memberDialogChannelIDs = [];
 
 function showNewGroupField(on) {
   document.getElementById("member-new-group-wrap").classList.toggle("hidden", !on);
@@ -257,35 +258,57 @@ function openGroupDialog(group) {
   document.getElementById("group-name").select();
 }
 
-async function openMemberDialog(member, channelId) {
+function channelsNotInRelay(channelIds, relayId) {
+  const slug = state.relays.find((r) => r.id === relayId)?.slug;
+  if (!slug) return channelIds;
+  return channelIds.filter((id) => !(state.channels.find((c) => c.id === id)?.relay_slugs || []).includes(slug));
+}
+
+async function finishMemberSave(relayId, title, body = "") {
+  document.getElementById("member-dialog").close();
+  if (state.currentRelay?.id === relayId) await refreshRelayLineup();
+  await loadChannels();
+  toast.success(title, body);
+}
+
+async function openMemberDialog(member, channelIds) {
+  const dlg = document.getElementById("member-dialog");
+  if (dlg.open) return;
+  const ids = channelIds == null ? [] : (Array.isArray(channelIds) ? channelIds : [channelIds]).map(String);
   const relayWrap = document.getElementById("member-relay-wrap");
   const relaySel = document.getElementById("member-relay");
   const channelWrap = document.getElementById("member-channel-wrap");
   const channelSel = document.getElementById("member-channel");
+  memberDialogChannelIDs = [];
 
-  if (channelId) {
-    const ch = state.channels.find((c) => c.id === channelId);
-    if (!ch) return;
-    const relays = state.relays.filter((r) => !(ch.relay_slugs || []).includes(r.slug));
+  if (ids.length) {
+    const chosen = ids.map((id) => state.channels.find((c) => c.id === id)).filter(Boolean);
+    if (!chosen.length) return;
+    memberDialogChannelIDs = chosen.map((c) => c.id);
+    const relays = state.relays.filter((r) => channelsNotInRelay(memberDialogChannelIDs, r.id).length);
     if (!state.relays.length) { toast.info("Create a relay first"); return; }
     if (!relays.length) { toast.info("Already in every relay"); return; }
     relayWrap.classList.remove("hidden");
     channelWrap.classList.add("hidden");
     relaySel.innerHTML = relays.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join("");
-    channelSel.innerHTML = `<option value="${ch.id}">${esc(ch.name)}</option>`;
-    document.getElementById("member-dialog-title").textContent = "Add to Relay";
+    document.getElementById("member-dialog-title").textContent = memberDialogChannelIDs.length > 1
+      ? `Add ${memberDialogChannelIDs.length} Channels to Relay` : "Add to Relay";
   } else if (!state.currentRelay) {
     return;
   } else {
+    const taken = new Set((state.currentRelay.memberships || []).map((m) => m.channel_id));
+    const available = member ? state.channels : state.channels.filter((c) => !taken.has(c.id));
+    if (!member && !available.length) { toast.info("All channels are already in this relay"); return; }
     relayWrap.classList.add("hidden");
     channelWrap.classList.remove("hidden");
     relaySel.innerHTML = `<option value="${state.currentRelay.id}">${esc(state.currentRelay.name)}</option>`;
-    channelSel.innerHTML = state.channels.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    channelSel.innerHTML = available.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    channelSel.value = member?.channel_id || available[0]?.id || "";
     document.getElementById("member-dialog-title").textContent = member ? "Edit Membership" : "Add Channel";
   }
 
   document.getElementById("member-id").value = member?.id || "";
-  document.getElementById("member-channel").value = channelId || member?.channel_id || state.channels[0]?.id || "";
+  document.getElementById("member-save").textContent = member ? "Save" : "Add";
   document.getElementById("member-error").textContent = "";
   try {
     if (!await loadMemberTargets(Number(relaySel.value), member)) return;
@@ -293,7 +316,8 @@ async function openMemberDialog(member, channelId) {
     toast.error("Failed to load relay", err.message);
     return;
   }
-  document.getElementById("member-dialog").showModal();
+  if (dlg.open) return;
+  dlg.showModal();
 }
 
 function wireRelays() {
@@ -469,13 +493,16 @@ function wireRelays() {
     errEl.textContent = "";
     const relayId = Number(document.getElementById("member-relay").value);
     if (!relayId) { errEl.textContent = "Select a Relay"; return; }
-    const channelId = document.getElementById("member-channel").value;
-    if (!channelId) { errEl.textContent = "Select a Channel"; return; }
+    const preset = memberDialogChannelIDs;
+    const channelIds = preset.length ? preset : [document.getElementById("member-channel").value].filter(Boolean);
+    if (!channelIds.length) { errEl.textContent = "Select a Channel"; return; }
     const id = document.getElementById("member-id").value;
     const relayName = document.getElementById("member-relay").selectedOptions[0]?.textContent || "";
     const groupRaw = document.getElementById("member-group").value;
     const newGroupName = document.getElementById("member-new-group").value.trim();
     if (groupRaw === MEMBER_NEW_GROUP && !newGroupName) { errEl.textContent = "Enter a Group name"; return; }
+    const toAdd = id || !preset.length ? channelIds : channelsNotInRelay(channelIds, relayId);
+    if (!toAdd.length) { errEl.textContent = "Already in this relay"; return; }
     saveBtn.disabled = true;
     try {
       let groupId = Number(groupRaw);
@@ -487,16 +514,40 @@ function wireRelays() {
         sel.value = String(g.id);
         showNewGroupField(false);
       }
-      const body = {
-        channel_id: channelId,
-        group_id: groupId,
-      };
-      if (id) await api(`/api/relays/${relayId}/memberships/${id}`, { method: "PUT", body: JSON.stringify(body) });
-      else await api(`/api/relays/${relayId}/memberships`, { method: "POST", body: JSON.stringify(body) });
-      document.getElementById("member-dialog").close();
-      if (state.currentRelay?.id === relayId) await refreshRelayLineup();
-      await loadChannels();
-      toast.success(id ? "Membership updated" : "Channel added to Relay", id ? "" : relayName);
+      if (id) {
+        await api(`/api/relays/${relayId}/memberships/${id}`, {
+          method: "PUT",
+          body: JSON.stringify({ channel_id: toAdd[0], group_id: groupId }),
+        });
+        await finishMemberSave(relayId, "Membership updated");
+        return;
+      }
+      let added = 0;
+      let skipped = channelIds.length - toAdd.length;
+      const failures = [];
+      for (const channelId of toAdd) {
+        try {
+          await api(`/api/relays/${relayId}/memberships`, {
+            method: "POST",
+            body: JSON.stringify({ channel_id: channelId, group_id: groupId }),
+          });
+          added++;
+        } catch (err) {
+          if (/already in this relay/i.test(err.message)) skipped++;
+          else failures.push(err.message);
+        }
+      }
+      if (!added) {
+        errEl.textContent = failures[0] || "Already in this relay";
+        if (failures.length) toast.error("Save failed", failures[0]);
+        return;
+      }
+      const sub = failures.length
+        ? `${failures.length} failed: ${failures[0]}`
+        : skipped
+          ? `${skipped} already in this relay`
+          : relayName;
+      await finishMemberSave(relayId, added === 1 ? "Channel added to Relay" : `${added} channels added to Relay`, sub);
     } catch (err) { errEl.textContent = err.message; toast.error("Save failed", err.message); }
     finally { saveBtn.disabled = false; }
   });
