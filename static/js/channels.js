@@ -757,13 +757,12 @@ function wireChannels() {
           fail++;
         }
         done++;
-        loading.update("loading", "Testing all channels…", `${done} / ${ids.length} · ${ok} ok · ${fail} failed`, 0);
+        loading.update("loading", "Testing all channels…", `${done} / ${ids.length} · ${ok} ok · ${fail} failed`);
       });
       loading.update(
         fail ? "error" : "success",
         fail ? "Channel tests finished" : "All channels OK",
         `${ok} ok · ${fail} failed`,
-        7000,
       );
     } finally {
       state.testingAllChannels = false;

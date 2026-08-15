@@ -251,10 +251,13 @@ function esc(s) {
 }
 
 let toastSeq = 0;
-function notify(type, title, body = "", { timeout = 4200, id = null } = {}) {
+const TOAST_MS = 10000;
+
+function notify(type, title, body = "", { timeout = TOAST_MS, id = null } = {}) {
   const root = document.getElementById("toasts");
   if (!root) return null;
   const toastId = id || `toast-${++toastSeq}`;
+  timeout = timeout > 0 ? timeout : TOAST_MS;
   let el = document.getElementById(toastId);
   if (!el) {
     el = document.createElement("div");
@@ -278,20 +281,21 @@ function notify(type, title, body = "", { timeout = 4200, id = null } = {}) {
   };
   el.querySelector(".toast-close").onclick = close;
   clearTimeout(el._timer);
-  if (timeout > 0) el._timer = setTimeout(close, timeout);
+  el._timer = setTimeout(close, timeout);
   return {
     id: toastId,
-    update(nextType, nextTitle, nextBody = "", nextTimeout = timeout) {
-      return notify(nextType, nextTitle, nextBody, { timeout: nextTimeout, id: toastId });
+    update(nextType, nextTitle, nextBody = "", opts) {
+      return notify(nextType, nextTitle, nextBody, { timeout, ...opts, id: toastId });
     },
     close,
   };
 }
+
 const toast = {
   success: (title, body, opts) => notify("success", title, body, opts),
-  error: (title, body, opts) => notify("error", title, body, { timeout: 7000, ...opts }),
+  error: (title, body, opts) => notify("error", title, body, opts),
   info: (title, body, opts) => notify("info", title, body, opts),
-  loading: (title, body, opts) => notify("loading", title, body, { timeout: 0, ...opts }),
+  loading: (title, body, opts) => notify("loading", title, body, opts),
 };
 
 function showTab(name) {
@@ -419,7 +423,7 @@ async function bulkDelete(label, ids, deleteOne) {
     loading.update("success", `Deleted ${successfulIDs.length} ${label}`);
   } else {
     const body = failures.slice(0, 6).map((f) => `${f.id}: ${f.error}`).join("\n");
-    loading.update("error", `Deleted ${successfulIDs.length}, failed ${failures.length}`, body, 8000);
+    loading.update("error", `Deleted ${successfulIDs.length}, failed ${failures.length}`, body);
   }
   return { successfulIDs, failures };
 }
