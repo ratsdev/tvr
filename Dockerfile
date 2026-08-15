@@ -2,22 +2,20 @@
 
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-RUN apk add --no-cache git ca-certificates
+RUN apk add --no-cache make ca-certificates
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
-  -ldflags="-s -w -X github.com/ratsdev/tvr/internal/version.Version=${VERSION} -X github.com/ratsdev/tvr/internal/version.Commit=${COMMIT}" \
-  -o /out/tvr ./cmd/tvr
+RUN make build VERSION="${VERSION}" COMMIT="${COMMIT}"
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata ffmpeg \
   && adduser -D -H -u 1000 tvr \
   && mkdir -p /data \
   && chown tvr:tvr /data
-COPY --from=build /out/tvr /usr/local/bin/tvr
+COPY --from=build /src/bin/tvr /usr/local/bin/tvr
 USER tvr
 WORKDIR /data
 EXPOSE 8080
